@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Conversation usage statistics">
+  <defs>
+    <linearGradient id="usageStatsBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4C6FFF"/>
+      <stop offset="100%" stop-color="#22C3DD"/>
+    </linearGradient>
+    <linearGradient id="usageStatsFade" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#usageStatsBg)"/>
+  <g fill="url(#usageStatsFade)">
+    <rect x="13" y="34" width="8" height="17" rx="3"/>
+    <rect x="24" y="26" width="8" height="25" rx="3"/>
+    <rect x="35" y="18" width="8" height="33" rx="3"/>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M48 38 L53 30 L57 34"/>
+  </g>
+  <circle cx="50" cy="27" r="3.2" fill="#FFFFFF"/>
+</svg>

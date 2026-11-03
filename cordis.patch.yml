@@ -1,0 +1,6 @@
+# Bundle patch layer: one row inserts this package into the profile's Loader
+# tree. The row name is the module specifier, which is also what the client
+# module scan keys on — it must equal the package name in package.json.
+- insert:
+    - id: usage-stats
+      name: '@echovic/dsh-usage-stats'

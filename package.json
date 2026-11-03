@@ -1,0 +1,68 @@
+{
+  "name": "@echovic/dsh-usage-stats",
+  "version": "0.2.0",
+  "private": false,
+  "description": "Usage, runtime, tool cost and token-trend statistics for every DeepSeek Harness conversation, projected from the durable Session logs",
+  "type": "module",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "node test/aggregate.test.mjs && node test/route.test.mjs && node test/client.test.mjs",
+    "prepare:publish": "node scripts/prepare-publish.mjs"
+  },
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib/index.js",
+    "lib/aggregate.js",
+    "lib/client.js",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "bundle",
+    "usage",
+    "tokens",
+    "analytics"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "echovic",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/echoVic/dsh-usage-stats.git"
+  },
+  "homepage": "https://github.com/echoVic/dsh-usage-stats#readme",
+  "bugs": {
+    "url": "https://github.com/echoVic/dsh-usage-stats/issues"
+  }
+}

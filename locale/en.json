@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Conversation Usage",
+    "description": "Total runtime, token consumption, turns and tool calls across every conversation, folded from the durable session logs."
+  }
+}
