@@ -63,8 +63,9 @@ user overrides ($DSH_HOME/usage-stats/prices.json)  ← optional, wins per entry
   the USD page. Prices are per **1M tokens**, per bucket (`input`, `cacheRead`,
   `cacheWrite`, `output`); cache writes are billed at the cache-miss rate.
 - **Refresh**: the table is re-fetched when the 24 h TTL expires, or immediately
-  when the panel's Refresh button is used (`?force=1`). `DSH_USAGE_STATS_AUTO_PRICING=0`
-  disables the automatic fetch entirely.
+  when the panel's Refresh button (or the footer's **刷新官网价格 / Refresh official
+  prices** action) is used (`?force=1`); the header Refresh tooltip says so too.
+  `DSH_USAGE_STATS_AUTO_PRICING=0` disables the automatic fetch entirely.
 - **Provenance is reported**: the payload says whether the table came from the
   live page (`auto`), the TTL cache (`cache`), the bundled snapshot (`bundled`), a
   manual file (`manual`) or a mix (`mixed`), with its URL and fetch time. The

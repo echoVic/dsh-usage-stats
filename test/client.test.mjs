@@ -808,6 +808,7 @@ test('renders the v4 dashboard with every section and without missing locale key
   assert.equal(inspected.markers.includes('drawer'), false);
   assert.match(inspected.text, /官网价目表/);
   assert.match(inspected.text, /前更新/);
+  assert.match(inspected.text, /刷新官网价格/, 'the footer offers an explicit official-price refresh action');
   assert.match(inspected.text, /修复登录问题/);
   assert.match(inspected.text, /未命名对话/);
   assert.match(inspected.text, /default-workspace/);
@@ -866,6 +867,7 @@ test('renders a v3 Host payload without the price-provenance line', async () => 
   assert.ok(inspected.markers.includes('upgrade-pricing'));
   assert.match(inspected.text, /重启应用后启用官网价目表/);
   assert.doesNotMatch(inspected.text, /官网价目表 · /);
+  assert.doesNotMatch(inspected.text, /刷新官网价格/);
   assert.deepEqual([...boot.missing], []);
 });
 
@@ -895,6 +897,28 @@ test('clicking a conversation row opens the detail drawer', async () => {
   assert.deepEqual(inspected.buggyVars, []);
 });
 
+test('the official-price refresh copy refetches with force=1', async () => {
+  const boot = bootClient('zh', fixtureV4());
+  boot.face.apply(boot.ctx);
+  for (const injection of boot.injections) injection.callback();
+  const main = boot.registrations.find((entry) => entry.options.name === 'main');
+  const tree = await boot.mount(main.component, {});
+
+  const buttons = [];
+  walk(tree, (node) => {
+    if (node.kind === 'element' && node.type === 'button' && node.props.children === '刷新官网价格') buttons.push(node);
+  });
+  assert.equal(buttons.length, 1, 'exactly one official-price refresh button in the footer');
+  assert.equal(boot.requestedUrls.length, 1);
+
+  buttons[0].props.onClick();
+  const refreshed = await boot.settle(main.component, {});
+  assert.equal(boot.requestedUrls.length, 2, 'the refresh action loads the report again');
+  assert.match(boot.requestedUrls[1], /force=1/);
+  assert.match(inspectTree(refreshed).text, /刷新官网价格/);
+  assert.deepEqual([...boot.missing], []);
+});
+
 test('renders in English without missing keys', async () => {
   const { boot, inspected } = await renderPanel('en', fixtureV4());
   assert.match(inspected.text, /Usage/);
@@ -907,6 +931,7 @@ test('renders in English without missing keys', async () => {
   assert.match(inspected.text, /Estimated cost/);
   assert.match(inspected.text, /This month used 92.5%/);
   assert.match(inspected.text, /Official price table/);
+  assert.match(inspected.text, /Refresh official prices/);
   assert.match(inspected.text, /Conversations/);
   assert.match(inspected.text, /Include fork prefix/);
   assert.deepEqual([...boot.missing], []);
