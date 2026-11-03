@@ -6,7 +6,7 @@
   "type": "module",
   "main": "lib/index.js",
   "scripts": {
-    "test": "node test/aggregate.test.mjs && node test/route.test.mjs && node test/client.test.mjs",
+    "test": "node test/aggregate.test.mjs && node test/pricing.test.mjs && node test/route.test.mjs && node test/client.test.mjs",
     "prepare:publish": "node scripts/prepare-publish.mjs"
   },
   "exports": {
@@ -25,6 +25,7 @@
     "lib/index.js",
     "lib/aggregate.js",
     "lib/client.js",
+    "lib/pricing.js",
     "locale/*.json",
     "icon.svg",
     "README.md",
