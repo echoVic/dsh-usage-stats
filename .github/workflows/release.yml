@@ -42,7 +42,9 @@ jobs:
         run: |
           mkdir -p dist
           npm pack --pack-destination dist
-          sha256sum dist/*.tgz > dist/SHA256SUMS.txt
+          # Checksums reference the release asset's bare filename, so users can
+          # run `shasum -a 256 -c SHA256SUMS.txt` next to the downloaded tarball.
+          (cd dist && sha256sum ./*.tgz > SHA256SUMS.txt)
           ls -l dist
 
       - name: Create GitHub Release
