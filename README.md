@@ -6,9 +6,13 @@
 
 Conversation usage statistics for the DeepSeek Harness Web shell — a central
 panel (and a matching agent tool) that answers *how much did my conversations
-cost, where did the time go, and what is trending.*
+cost, where did the time go, and what is trending.* Per-model token accounting,
+an optional user price table with a monthly budget, and a per-conversation
+detail drawer are part of the v0.3 surface.
 
 ![用量统计面板：总览卡片、Token 趋势、运行时长构成、Token 构成、工具消耗排行、轮次健康](https://raw.githubusercontent.com/echoVic/dsh-usage-stats/main/docs/screenshot.png)
+
+*(截图来自 v0.2；v0.3 在 Token 构成下方新增模型用量表，卡片区新增预计费用，点击任意对话行打开详情抽屉。)*
 
 ## What it measures
 
@@ -41,8 +45,45 @@ so it is excluded from every total by default (the row still shows it as
 `继承 X`, and the "计入分支继承" switch includes it). A *resumed* (not seeded)
 session folds its whole log — that prefix is its own history.
 
-There is no pricing/cost estimate: the Harness log does not carry prices, and a
-hard-coded price table would be wrong the moment a provider changes.
+## Cost and budget (optional, user-supplied prices)
+
+The Harness log carries no prices, so cost is never invented: the plugin ships an
+**example** table and only shows money once you fill real numbers.
+
+```sh
+cp prices.example.json ~/.dsh/usage-stats/prices.json
+# or point the plugin elsewhere:
+#   DSH_USAGE_STATS_PRICES=/path/to/prices.json
+```
+
+```json
+{
+  "currency": "CNY",
+  "budget": { "monthly": 100 },
+  "prices": {
+    "deepseek-official/deepseek-flash": {
+      "input": 0.5, "cacheRead": 0.1, "cacheWrite": 0.5, "output": 2.0
+    },
+    "deepseek-official/*": { "input": 0, "cacheRead": 0, "cacheWrite": 0, "output": 0 }
+  }
+}
+```
+
+- **Units**: price per **1 million tokens**, per bucket. `input` is the uncached
+  prompt bucket, `cacheRead`/`cacheWrite` are the cache buckets, `output` is
+  completion. Route precedence is `provider/model` → `provider/*` → `*/*` → `*`.
+- **Partial cost is explicit**: a model without a price still reports tokens; it
+  appears in `costing.unpricedModels`, the panel footer says how many models are
+  unpriced, and its row cost shows `—` rather than a fake zero.
+- **Budget**: `budget.monthly` in `currency`. Month-to-date cost is computed from
+  the whole corpus regardless of the panel's selected range, and at 80% / 100%
+  the panel shows a warning / error banner. The agent tool reports the same
+  month-to-date figure.
+- The file is re-read when its mtime changes; a malformed file degrades to
+  "unconfigured" with the parse error surfaced in the payload.
+
+There is still no hard-coded price table: numbers differ per account and change
+over time, so the panel treats your table as the only source of truth.
 
 ## Architecture
 
@@ -101,15 +142,18 @@ GET /api/usage-stats.summary
     &inherited=1                (include a fork's inherited prefix; default off)
     &offset=<minutes east UTC>  (local day/hour buckets; default 0)
     &force=1                    (bypass the corpus TTL cache)
-→ 200 { ok, version: 2, cached, cacheAgeMs, ttlMs, generatedAt, scanMs,
+→ 200 { ok, version: 3, cached, cacheAgeMs, ttlMs, generatedAt, scanMs,
         range, includeInherited, offsetMinutes,
         scope: { listed, analyzed, failed, live, subagents },
+        pricing: { configured, currency, budgetMonthly, source, updatedAt, error },
+        costing: { configured, currency, budgetMonthly, monthTokens, monthCost,
+                   budgetRatio, unpricedModels: [ 'provider/model', … ] },
         totals: { sessions, liveSessions, subagentSessions,
                   runTimeMs, modelMs, toolMs, humanWaitMs, otherMs,
                   turns, steps, toolCalls, retries, userMessages,
                   assistantMessages,
                   tokens { input, output, cacheRead, cacheWrite, prompt, total },
-                  cacheHitRate,
+                  cacheHitRate, cost, monthTokens, monthCost,
                   inherited { tokens, runTimeMs, turns, steps },
                   firstActivityAt, lastActivityAt },
         sessions: [ { id, title, createdAt, lastActiveAt, live, parentSession,
@@ -117,14 +161,17 @@ GET /api/usage-stats.summary
                       agentPreset, eventCount, runTimeMs, modelMs, toolMs,
                       humanWaitMs, otherMs, turns, steps, toolCalls, retries,
                       userMessages, assistantMessages, tokens, cacheHitRate,
-                      models, inherited } ],
+                      cost, unpriced, models, tools, turnEnds, inherited } ],
         trend: { unit: 'day'|'hour', buckets: [ { start, tokens, runTimeMs,
-                  steps, toolCalls, sessions } ] },
+                  steps, toolCalls, cost, sessions } ] },
         tools: [ { name, calls, ms, errors } ],
-        models: [ { provider, model, calls } ],
+        models: [ { provider, model, calls, tokens, cacheHitRate, cost } ],
         turnEnds: { completed, aborted, interrupted, error, maxTokens,
                     blocked, forked, other, open },
         errors: [ { sessionId, message } ], partial }
+
+Per-session `tools` are ranked by execution time; `models` carry the same
+token/cost shape as the global list. Unpriced routes keep `cost: null`.
 → 405 non-GET · 503 { ok: false, error }     (e.g. no sessionQuery service)
 ```
 
@@ -132,9 +179,10 @@ GET /api/usage-stats.summary
 
 `conversation_usage` takes
 `{ top?: 1–20 (default 5), range?: 'all'|'30d'|'7d'|'1d', inherited?: boolean, refresh?: boolean }`
-and returns the totals (with the runtime split and turn health), the
-highest-consumption conversations and the costliest tools, with the omitted
-count made explicit. Read-only.
+and returns the totals (with the runtime split, per-model tokens, turn health
+and the estimated cost / month-to-date budget), the highest-consumption
+conversations and the costliest tools, with the omitted count made explicit.
+Read-only.
 
 ## Install
 
@@ -157,23 +205,30 @@ cd <checkout>
 npm test
 ```
 
-- `test/aggregate.test.mjs` — the folds against synthetic event logs: the
+- `test/aggregate.test.mjs` (18) — the folds against synthetic event logs: the
   four-way split (including parallel tools and approval-inside-tool), token
-  replacement/retry semantics, turn endings, open turns, range clipping, local
-  day/hour trend buckets, tool/model aggregation, and the inherited-prefix
-  mode;
-- `test/route.test.mjs` — `apply()` registration, the Fetch handler, range/
-  inherited parameters, the corpus TTL cache, revision-aware per-session reuse,
-  failure isolation and the agent tool;
-- `test/client.test.mjs` — boots the real browser module in a `vm` with a
-  stateful React double, renders the full v2 dashboard in zh and en (and the
-  legacy v1 payload with its restart notice), asserting both slot
-  registrations, complete locale dictionaries and theme-token-only colors.
+  replacement/retry semantics, per-route token attribution, the price table and
+  wildcard resolution, range-independent month-to-date cost, turn endings, open
+  turns, range clipping, local day/hour trend buckets, per-session tool/turn
+  detail, and the inherited-prefix mode;
+- `test/route.test.mjs` (13) — `apply()` registration, the Fetch handler,
+  range/inherited parameters, the price-file loader (configured, malformed),
+  the corpus TTL cache, revision-aware per-session reuse, failure isolation and
+  the agent tool;
+- `test/client.test.mjs` (8) — boots the real browser module in a `vm` with a
+  stateful React double, renders the full v3 dashboard in zh and en, opens the
+  detail drawer by clicking a conversation row, checks the v2-payload upgrade
+  notice, and renders the legacy v1 payload with its restart notice, asserting
+  both slot registrations, complete locale dictionaries and theme-token-only
+  colors.
 
 ## Known limits
 
 - Token totals only count usage the provider reported in the log; sessions from
   providers that omit usage contribute zeros.
+- Cost is an estimate from *your* price table, not a bill: unpriced models are
+  excluded from money figures (and reported as unpriced), and the month figure
+  is local-calendar based.
 - Runtime is turn wall time — it includes human waits and queueing; the split
   separates the human part explicitly.
 - `tools[].ms` is summed per-call execution time (workload), so parallel tool

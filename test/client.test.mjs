@@ -29,7 +29,7 @@ const CLIENT_SOURCE = readFileSync(fileURLToPath(new URL('../lib/client.js', imp
  * A v2 payload shaped exactly like the Host route's success body.
  * @returns the fixture.
  */
-function fixtureV2() {
+function fixtureV3() {
   const now = Date.now();
   const dayStart = (daysAgo) => {
     const date = new Date(now);
@@ -38,7 +38,7 @@ function fixtureV2() {
   };
   return {
     ok: true,
-    version: 2,
+    version: 3,
     cached: false,
     cacheAgeMs: 0,
     ttlMs: 15000,
@@ -48,6 +48,23 @@ function fixtureV2() {
     generatedAt: now - 1200,
     scanMs: 12,
     scope: { listed: 2, analyzed: 2, failed: 0, live: 1, subagents: 1 },
+    pricing: {
+      configured: true,
+      currency: 'CNY',
+      budgetMonthly: 100,
+      source: '/Users/test/.dsh/usage-stats/prices.json',
+      updatedAt: now - 5000,
+      error: null,
+    },
+    costing: {
+      configured: true,
+      currency: 'CNY',
+      budgetMonthly: 100,
+      monthTokens: 900_000_000,
+      monthCost: 92.5,
+      budgetRatio: 0.925,
+      unpricedModels: ['unknown/provider'],
+    },
     totals: {
       sessions: 2,
       liveSessions: 1,
@@ -72,6 +89,9 @@ function fixtureV2() {
         total: 10_604_935,
       },
       cacheHitRate: 0.8773,
+      cost: 58.25,
+      monthTokens: 900_000_000,
+      monthCost: 92.5,
       inherited: { tokens: 30_571_706, runTimeMs: 1_576_165, turns: 3, steps: 9 },
       firstActivityAt: now - 30 * 86400000,
       lastActivityAt: now - 60_000,
@@ -111,10 +131,31 @@ function fixtureV2() {
           total: 7_210_000,
         },
         cacheHitRate: 0.868,
+        cost: 40.1,
+        unpriced: false,
         models: [
-          { provider: 'deepseek-official', model: 'deepseek-flash', calls: 40 },
-          { provider: 'deepseek-official', model: 'deepseek-pro', calls: 4 },
+          {
+            provider: 'deepseek-official',
+            model: 'deepseek-flash',
+            calls: 40,
+            tokens: { input: 900_000, output: 300_000, cacheRead: 6_000_000, cacheWrite: 10_000, prompt: 6_910_000, total: 7_210_000 },
+            cacheHitRate: 0.868,
+            cost: 40.1,
+          },
+          {
+            provider: 'deepseek-official',
+            model: 'deepseek-pro',
+            calls: 4,
+            tokens: { input: 10_000, output: 2_000, cacheRead: 0, cacheWrite: 0, prompt: 10_000, total: 12_000 },
+            cacheHitRate: 0,
+            cost: 0.5,
+          },
         ],
+        tools: [
+          { name: 'bash', calls: 30, ms: 1_200_000, errors: 2 },
+          { name: 'read', calls: 18, ms: 500_000, errors: 0 },
+        ],
+        turnEnds: { completed: 16, aborted: 1, interrupted: 0, error: 1, maxTokens: 0, blocked: 0, forked: 0, other: 0, open: 0 },
         inherited: { tokens: 0, runTimeMs: 0, turns: 0, steps: 0 },
       },
       {
@@ -151,23 +192,53 @@ function fixtureV2() {
           total: 3_394_935,
         },
         cacheHitRate: 0.8959,
+        cost: 18.15,
+        unpriced: true,
         models: [],
+        tools: [],
+        turnEnds: { completed: 24, aborted: 0, interrupted: 0, error: 0, maxTokens: 0, blocked: 0, forked: 0, other: 0, open: 0 },
         inherited: { tokens: 1_500_000, runTimeMs: 500_000, turns: 2, steps: 4 },
       },
     ],
     trend: {
       unit: 'day',
       buckets: [
-        { start: dayStart(3), tokens: 1000, runTimeMs: 60_000, steps: 3, toolCalls: 1, sessions: 1 },
-        { start: dayStart(2), tokens: 0, runTimeMs: 0, steps: 0, toolCalls: 0, sessions: 0 },
-        { start: dayStart(1), tokens: 2_500_000, runTimeMs: 900_000, steps: 21, toolCalls: 9, sessions: 1 },
-        { start: dayStart(0), tokens: 8_000_000, runTimeMs: 1_500_000, steps: 40, toolCalls: 20, sessions: 2 },
+        { start: dayStart(3), tokens: 1000, runTimeMs: 60_000, steps: 3, toolCalls: 1, cost: 0.01, sessions: 1 },
+        { start: dayStart(2), tokens: 0, runTimeMs: 0, steps: 0, toolCalls: 0, cost: 0, sessions: 0 },
+        { start: dayStart(1), tokens: 2_500_000, runTimeMs: 900_000, steps: 21, toolCalls: 9, cost: 12.5, sessions: 1 },
+        { start: dayStart(0), tokens: 8_000_000, runTimeMs: 1_500_000, steps: 40, toolCalls: 20, cost: 45.74, sessions: 2 },
       ],
     },
     tools: [
       { name: 'bash', calls: 30, ms: 1_200_000, errors: 2 },
       { name: 'read', calls: 18, ms: 500_000, errors: 0 },
       { name: 'edit', calls: 9, ms: 300_000, errors: 1 },
+    ],
+    models: [
+      {
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+        calls: 40,
+        tokens: { input: 900_000, output: 300_000, cacheRead: 6_000_000, cacheWrite: 10_000, prompt: 6_910_000, total: 7_210_000 },
+        cacheHitRate: 0.868,
+        cost: 40.1,
+      },
+      {
+        provider: 'deepseek-official',
+        model: 'deepseek-pro',
+        calls: 9,
+        tokens: { input: 344_567, output: 158_789, cacheRead: 2_901_234, cacheWrite: 2_345, prompt: 3_248_146, total: 3_406_935 },
+        cacheHitRate: 0.893,
+        cost: 18.15,
+      },
+      {
+        provider: null,
+        model: null,
+        calls: 1,
+        tokens: { input: 1_000, output: 100, cacheRead: 0, cacheWrite: 0, prompt: 1_000, total: 1_100 },
+        cacheHitRate: 0,
+        cost: null,
+      },
     ],
     turnEnds: {
       completed: 38,
@@ -183,6 +254,39 @@ function fixtureV2() {
     errors: [],
     partial: false,
   };
+}
+
+/**
+ * The v2 payload a still-running Host half serves before a restart: same
+ * structure without the v3 model-token/cost/session-detail fields.
+ * @returns the fixture.
+ */
+function fixtureV2Host() {
+  const data = JSON.parse(JSON.stringify(fixtureV3()));
+  data.version = 2;
+  delete data.pricing;
+  delete data.costing;
+  delete data.totals.cost;
+  delete data.totals.monthTokens;
+  delete data.totals.monthCost;
+  for (const bucket of data.trend.buckets) delete bucket.cost;
+  for (const row of data.sessions) {
+    delete row.cost;
+    delete row.unpriced;
+    delete row.tools;
+    delete row.turnEnds;
+    for (const model of row.models) {
+      delete model.tokens;
+      delete model.cacheHitRate;
+      delete model.cost;
+    }
+  }
+  for (const model of data.models) {
+    delete model.tokens;
+    delete model.cacheHitRate;
+    delete model.cost;
+  }
+  return data;
 }
 
 /**
@@ -420,7 +524,7 @@ function reactDouble() {
    * @param props - root props.
    * @returns the rendered tree.
    */
-  async function mount(component, props) {
+  async function settle(component, props) {
     let tree = null;
     for (let iteration = 0; iteration < 40; iteration += 1) {
       dirty = false;
@@ -433,7 +537,7 @@ function reactDouble() {
     return tree;
   }
 
-  return { React, mount };
+  return { React, mount: settle, settle };
 }
 
 /**
@@ -571,6 +675,7 @@ function bootClient(localeId, payload) {
     face,
     ctx,
     mount: double.mount,
+    settle: double.settle,
     requestedUrls,
     setLocale(next) {
       currentLocale = next;
@@ -622,7 +727,7 @@ async function renderPanel(localeId, payload) {
 }
 
 test('module face registers one sidebar cell and one addressed main panel', () => {
-  const boot = bootClient('zh', fixtureV2());
+  const boot = bootClient('zh', fixtureV3());
   assert.deepEqual(Array.from(boot.face.inject).sort(), ['locale', 'slots']);
   boot.face.apply(boot.ctx);
 
@@ -645,8 +750,8 @@ test('module face registers one sidebar cell and one addressed main panel', () =
   assert.equal(typeof main.component, 'function');
 });
 
-test('renders the v2 dashboard with every section and without missing locale keys', async () => {
-  const { boot, inspected } = await renderPanel('zh', fixtureV2());
+test('renders the v3 dashboard with every section and without missing locale keys', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV3());
 
   assert.match(inspected.text, /用量统计/);
   assert.match(inspected.text, /总 Token/);
@@ -655,19 +760,29 @@ test('renders the v2 dashboard with every section and without missing locale key
   assert.match(inspected.text, /运行时长构成/);
   assert.match(inspected.text, /工具消耗排行/);
   assert.match(inspected.text, /轮次健康/);
+  assert.match(inspected.text, /模型用量/);
+  assert.match(inspected.text, /预计费用/);
+  assert.match(inspected.text, /CNY 92.50/);
+  assert.match(inspected.text, /本月费用已用 92.5%/);
+  assert.match(inspected.text, /未知模型/);
+  assert.match(inspected.text, /1 个模型未配置价格/);
   assert.match(inspected.text, /对话明细/);
   assert.ok(inspected.markers.includes('panel'));
   assert.ok(inspected.markers.includes('trend'));
   assert.ok(inspected.markers.includes('runtime'));
   assert.ok(inspected.markers.includes('token-mix'));
+  assert.ok(inspected.markers.includes('models'));
   assert.ok(inspected.markers.includes('tools'));
   assert.ok(inspected.markers.includes('turns'));
+  assert.ok(inspected.markers.includes('budget'));
+  assert.equal(inspected.markers.includes('upgrade'), false);
+  assert.equal(inspected.markers.includes('drawer'), false);
   assert.match(inspected.text, /修复登录问题/);
   assert.match(inspected.text, /未命名对话/);
   assert.match(inspected.text, /default-workspace/);
   assert.match(inspected.text, /继承 150万/, 'the forked row annotates its inherited prefix');
   assert.match(inspected.text, /LLM 重试 7 次/);
-  assert.doesNotMatch(inspected.text, /重启应用/, 'a v2 payload needs no restart notice');
+  assert.doesNotMatch(inspected.text, /重启应用/, 'a v3 payload needs no restart notice');
   assert.deepEqual([...boot.missing], [], 'every rendered locale key must exist');
   assert.deepEqual(inspected.buggyVars, [], 'theme token references must be well formed');
   assert.ok(inspected.colorValues.length > 0);
@@ -697,21 +812,63 @@ test('renders the legacy v1 payload with cards, table and a restart notice', asy
   assert.deepEqual(inspected.buggyVars, []);
 });
 
+test('renders a v2 Host payload as before, with an upgrade notice for the missing v3 sections', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV2Host());
+
+  assert.match(inspected.text, /重启应用后启用模型用量/);
+  assert.match(inspected.text, /Token 趋势/);
+  assert.match(inspected.text, /运行时长构成/);
+  assert.match(inspected.text, /对话明细/);
+  assert.ok(inspected.markers.includes('trend'));
+  assert.ok(inspected.markers.includes('upgrade'));
+  assert.equal(inspected.markers.includes('models'), false, 'v3 model section stays hidden until the Host restarts');
+  assert.deepEqual([...boot.missing], []);
+});
+
+test('clicking a conversation row opens the detail drawer', async () => {
+  const boot = bootClient('zh', fixtureV3());
+  boot.face.apply(boot.ctx);
+  for (const injection of boot.injections) injection.callback();
+  const main = boot.registrations.find((entry) => entry.options.name === 'main');
+  const tree = await boot.mount(main.component, {});
+
+  const rows = [];
+  walk(tree, (node) => {
+    if (node.kind === 'element' && node.type === 'tr' && typeof node.props.onClick === 'function') rows.push(node);
+  });
+  assert.ok(rows.length >= 2, 'the table must render clickable conversation rows');
+  rows[0].props.onClick();
+
+  const opened = await boot.settle(main.component, {});
+  const inspected = inspectTree(opened);
+  assert.ok(inspected.markers.includes('drawer'), 'the drawer overlay must render');
+  assert.match(inspected.text, /会话详情|打开对话/);
+  assert.match(inspected.text, /关闭/);
+  assert.match(inspected.text, /模型用量/);
+  assert.match(inspected.text, /工具消耗排行/);
+  assert.match(inspected.text, /轮次健康/);
+  assert.deepEqual([...boot.missing], []);
+  assert.deepEqual(inspected.buggyVars, []);
+});
+
 test('renders in English without missing keys', async () => {
-  const { boot, inspected } = await renderPanel('en', fixtureV2());
+  const { boot, inspected } = await renderPanel('en', fixtureV3());
   assert.match(inspected.text, /Usage/);
   assert.match(inspected.text, /Total tokens/);
   assert.match(inspected.text, /Token trend/);
   assert.match(inspected.text, /Runtime composition/);
   assert.match(inspected.text, /Tool cost ranking/);
   assert.match(inspected.text, /Turn health/);
+  assert.match(inspected.text, /Model usage/);
+  assert.match(inspected.text, /Estimated cost/);
+  assert.match(inspected.text, /This month used 92.5%/);
   assert.match(inspected.text, /Conversations/);
   assert.match(inspected.text, /Include fork prefix/);
   assert.deepEqual([...boot.missing], []);
 });
 
 test('the sidebar icon renders an svg for both owner states', () => {
-  const boot = bootClient('zh', fixtureV2());
+  const boot = bootClient('zh', fixtureV3());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const rail = boot.registrations.find((entry) => entry.options.name === 'sidebar.panellist');

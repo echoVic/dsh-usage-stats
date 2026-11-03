@@ -1,6 +1,6 @@
 {
   "name": "@echovic/dsh-usage-stats",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "description": "Usage, runtime, tool cost and token-trend statistics for every DeepSeek Harness conversation, projected from the durable Session logs",
   "type": "module",
@@ -28,7 +28,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "prices.example.json"
   ],
   "dsh": {
     "bundle": {

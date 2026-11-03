@@ -342,13 +342,17 @@ test('aggregates tools and models across turns and sessions', () => {
 
   const report = summarize([sessionA, sessionB], { now: NOW, range: 'all' });
   assert.deepEqual(report.tools, [{ name: 'bash', calls: 2, ms: 2000, errors: 1 }]);
-  assert.deepEqual(report.models, [
-    { provider: 'deepseek-official', model: 'deepseek-flash', calls: 2 },
-    { provider: 'other', model: 'm2', calls: 1 },
-  ]);
-  assert.deepEqual(report.sessions[0].models, [
-    { provider: 'deepseek-official', model: 'deepseek-flash', calls: 1 },
-  ]);
+  assert.deepEqual(
+    report.models.map((model) => ({ provider: model.provider, model: model.model, calls: model.calls })),
+    [
+      { provider: 'deepseek-official', model: 'deepseek-flash', calls: 2 },
+      { provider: 'other', model: 'm2', calls: 1 },
+    ],
+  );
+  assert.deepEqual(
+    report.sessions[0].models.map((model) => ({ provider: model.provider, model: model.model, calls: model.calls })),
+    [{ provider: 'deepseek-official', model: 'deepseek-flash', calls: 1 }],
+  );
   assert.equal(report.totals.sessions, 2);
   assert.equal(report.totals.steps, 3);
 });
@@ -407,4 +411,168 @@ test('summarize of an empty corpus reports zeroed, nullable totals', () => {
   assert.equal(report.totals.lastActivityAt, null);
   assert.equal(report.trend.unit, 'day');
   assert.deepEqual(report.sessions, []);
+});
+
+test('attributes token buckets to the request route', () => {
+  seq = 0;
+  const usageChunk = (usage) => ({ type: 'chunk', time: 1300, chunk: { type: 'usage', usage } });
+  const events = [
+    event('turn/start', { turn: 1 }, 1000),
+    event('request/header', { header: { config: { provider: 'p', model: 'm1' } }, reason: 'initial' }, 1100),
+    event('step/start', { turn: 1, step: 1 }, 1200),
+    event('assistant/attempt', { turn: 1, step: 1, stream: [usageChunk({ inputTokens: 100, outputTokens: 10 })] }, 1300),
+    event('llm/retry-started', { turn: 1, step: 1, retry: 1 }, 1400),
+    event('assistant/attempt', { turn: 1, step: 1, stream: [usageChunk({ inputTokens: 120, outputTokens: 12 })] }, 1500),
+    assistantMessage(1, 1, { inputTokens: 150, outputTokens: 15 }, 1600, { provider: 'p', model: 'm1' }),
+    event('step/end', { turn: 1, step: 1 }, 1610),
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2000),
+    event('turn/start', { turn: 2 }, 3000),
+    event('request/header', { header: { config: { provider: 'p', model: 'm2' } }, reason: 'initial' }, 3100),
+    event('step/start', { turn: 2, step: 1 }, 3200),
+    assistantMessage(2, 1, { inputTokens: 50, outputTokens: 5 }, 3300, { provider: 'p', model: 'm2' }),
+    event('step/end', { turn: 2, step: 1 }, 3310),
+    event('turn/end', { turn: 2, reason: { kind: 'completed' } }, 4000),
+  ];
+  const session = analyzeSession(header(), events, { live: false });
+  const modelOf = (route) => Object.values(session.turns[0].models).find((entry) => entry.model === route);
+  const m1 = modelOf('m1');
+  // attempt #1 (retried) stays counted; attempt #2 is replaced by the message.
+  assert.deepEqual(m1.tokens, { input: 250, output: 25, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(m1.calls, 1);
+
+  const report = summarize([session], { now: NOW, range: 'all' });
+  const flash = report.models.find((model) => model.model === 'm1');
+  assert.deepEqual(flash.tokens, {
+    input: 250, output: 25, cacheRead: 0, cacheWrite: 0, prompt: 250, total: 275,
+  });
+  assert.equal(flash.calls, 1);
+  const second = report.models.find((model) => model.model === 'm2');
+  assert.equal(second.tokens.total, 55);
+});
+
+test('computes cost from the user price table and keeps unpriced models explicit', () => {
+  seq = 0;
+  const events = [
+    ...simpleTurn(1, NOW - 2 * HOUR_MS, NOW - 2 * HOUR_MS + 500, NOW - 2 * HOUR_MS + 1000, { inputTokens: 100, outputTokens: 10 }),
+  ];
+  const pricy = analyzeSession(header({ id: 'priced' }), events, { live: false });
+  const unpricedEvents = [
+    event('turn/start', { turn: 1 }, NOW - HOUR_MS),
+    event('step/start', { turn: 1, step: 1 }, NOW - HOUR_MS + 100),
+    assistantMessage(1, 1, { inputTokens: 50, outputTokens: 5 }, NOW - HOUR_MS + 500, { provider: 'other', model: 'x' }),
+    event('step/end', { turn: 1, step: 1 }, NOW - HOUR_MS + 600),
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - HOUR_MS + 1000),
+  ];
+  const unpriced = analyzeSession(header({ id: 'unpriced' }), unpricedEvents, { live: false });
+
+  const pricePerMillion = { input: 1_000_000, output: 2_000_000, cacheRead: 0, cacheWrite: 0 };
+  const report = summarize([pricy, unpriced], {
+    now: NOW,
+    range: 'all',
+    pricing: {
+      configured: true,
+      currency: 'CNY',
+      budgetMonthly: 100,
+      prices: { 'deepseek-official/*': pricePerMillion },
+    },
+  });
+
+  assert.equal(report.totals.cost, 120, '100 input × 1 + 10 output × 2');
+  assert.equal(report.totals.monthCost, 120);
+  assert.equal(report.costing.configured, true);
+  assert.equal(report.costing.currency, 'CNY');
+  assert.deepEqual(report.costing.unpricedModels, ['other/x']);
+  assert.equal(report.costing.budgetRatio, 1.2);
+
+  const pricedModel = report.models.find((model) => model.model === 'deepseek-flash');
+  assert.equal(pricedModel.cost, 120);
+  const unpricedModel = report.models.find((model) => model.model === 'x');
+  assert.equal(unpricedModel.cost, null);
+
+  const pricedRow = report.sessions.find((row) => row.id === 'priced');
+  const unpricedRow = report.sessions.find((row) => row.id === 'unpriced');
+  assert.equal(pricedRow.cost, 120);
+  assert.equal(unpricedRow.cost, null, 'a row with no priced tokens reports no cost');
+  assert.equal(unpricedRow.unpriced, true);
+  assert.equal(report.trend.buckets[report.trend.buckets.length - 1].cost, 120);
+
+  const wildcard = summarize([pricy, unpriced], {
+    now: NOW,
+    range: 'all',
+    pricing: { configured: true, currency: 'CNY', prices: { '*/*': pricePerMillion } },
+  });
+  assert.equal(wildcard.totals.cost, 120 + 60, 'the wildcard entry prices every route');
+
+  const unconfigured = summarize([pricy], { now: NOW, range: 'all' });
+  assert.equal(unconfigured.totals.cost, null);
+  assert.equal(unconfigured.costing.configured, false);
+  assert.equal(unconfigured.models[0].cost, null);
+});
+
+test('month-to-date cost is range-independent and feeds the budget', () => {
+  seq = 0;
+  const today = analyzeSession(header({ id: 'today' }), simpleTurn(
+    1, NOW - 2 * HOUR_MS, NOW - 2 * HOUR_MS + 500, NOW - 2 * HOUR_MS + 1000,
+    { inputTokens: 100, outputTokens: 10 },
+  ), { live: false });
+  const earlier = analyzeSession(header({ id: 'earlier' }), simpleTurn(
+    1, NOW - 5 * DAY_MS, NOW - 5 * DAY_MS + 500, NOW - 5 * DAY_MS + 1000,
+    { inputTokens: 50, outputTokens: 5 },
+  ), { live: false });
+
+  const pricing = {
+    configured: true,
+    currency: 'USD',
+    budgetMonthly: 50,
+    prices: { 'deepseek-official/*': { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  };
+  const report = summarize([today, earlier], {
+    now: NOW,
+    range: '1d',
+    from: NOW - DAY_MS,
+    to: NOW,
+    offsetMinutes: 0,
+    trendUnit: 'hour',
+    trendCount: 24,
+    pricing,
+  });
+
+  assert.equal(report.totals.cost, 100, 'only the current-day turn is inside the range');
+  assert.equal(report.totals.monthCost, 150, 'both turns are inside the current month');
+  assert.equal(report.totals.monthTokens, 110 + 55);
+  assert.equal(report.costing.budgetMonthly, 50);
+  assert.equal(report.costing.budgetRatio, 3);
+});
+
+test('reports per-session tools and turn endings for the detail drawer', () => {
+  seq = 0;
+  const events = [
+    ...simpleTurn(1, 1000, 1500, 2000, { inputTokens: 1, outputTokens: 1 }, { kind: 'completed' }),
+    ...simpleTurn(2, 3000, 3500, 4000, undefined, { kind: 'error', error: { message: 'boom', code: 'E' } }),
+    event('turn/start', { turn: 3 }, 5000),
+    event('tool/call', { turn: 3, step: 1, callId: 'c1', name: 'bash', arguments: '{}' }, 5100),
+    event('tool/result', {
+      turn: 3,
+      step: 1,
+      message: { role: 'tool', source: { kind: 'tool', callId: 'c1' }, toolCallId: 'c1', content: [] },
+    }, 5600),
+    event('tool/call', { turn: 3, step: 1, callId: 'c2', name: 'read', arguments: '{}' }, 5700),
+    event('tool/result', {
+      turn: 3,
+      step: 1,
+      message: { role: 'tool', source: { kind: 'tool', callId: 'c2' }, toolCallId: 'c2', content: [], isError: true },
+    }, 5800),
+    event('turn/end', { turn: 3, reason: { kind: 'completed' } }, 6000),
+  ];
+  const report = summarize([analyzeSession(header(), events, { live: false })], { now: NOW, range: 'all' });
+  const row = report.sessions[0];
+
+  assert.deepEqual(row.tools, [
+    { name: 'bash', calls: 1, ms: 500, errors: 0 },
+    { name: 'read', calls: 1, ms: 100, errors: 1 },
+  ]);
+  assert.equal(row.turnEnds.completed, 2);
+  assert.equal(row.turnEnds.error, 1);
+  assert.equal(report.turnEnds.completed, 2);
+  assert.equal(report.turnEnds.error, 1);
 });

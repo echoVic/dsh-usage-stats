@@ -10,9 +10,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { apply, RANGE_DAYS, ROUTE } from '../lib/index.js';
 
 const URL_ROOT = 'http://127.0.0.1:50878';
+// Keep the default price lookup deterministic: point it at a file that does
+// not exist unless a test creates one.
+const MISSING_PRICES = join(mkdtempSync(join(tmpdir(), 'dsh-usage-prices-')), 'prices.json');
+process.env.DSH_USAGE_STATS_PRICES = MISSING_PRICES;
 const DAY_MS = 86400000;
 const NOW = Date.now();
 
@@ -160,7 +168,7 @@ test('apply registers one authenticated GET route and one tool on the plugin fib
   assert.equal(calls.listSessions, 0);
 });
 
-test('serves a v2 report with runtime split, trend, tools and turn health', async () => {
+test('serves a v3 report with runtime split, trend, tools, turn health and cost metadata', async () => {
   const { ctx, registered, addLive } = fakeContext();
   const events = [
     ...simpleTurn(1, NOW - 5000, NOW - 3000, NOW - 2000, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30 }),
@@ -179,7 +187,7 @@ test('serves a v2 report with runtime split, trend, tools and turn health', asyn
   const payload = await response.json();
 
   assert.equal(payload.ok, true);
-  assert.equal(payload.version, 2);
+  assert.equal(payload.version, 3);
   assert.equal(payload.range, 'all');
   assert.equal(payload.includeInherited, false);
   assert.equal(payload.scope.listed, 1);
@@ -197,6 +205,17 @@ test('serves a v2 report with runtime split, trend, tools and turn health', asyn
   assert.equal(payload.totals.runTimeMs, payload.totals.modelMs + payload.totals.toolMs + payload.totals.humanWaitMs + payload.totals.otherMs);
   assert.deepEqual(payload.tools, [{ name: 'bash', calls: 1, ms: 200, errors: 0 }]);
   assert.equal(payload.turnEnds.completed, 2);
+  assert.equal(payload.pricing.configured, false, 'no price file means an explicit unconfigured block');
+  assert.equal(payload.costing.configured, false);
+  assert.equal(payload.costing.currency, 'USD');
+  assert.equal(payload.totals.cost, null);
+  assert.equal(payload.models.length, 1);
+  assert.equal(payload.models[0].model, 'deepseek-flash');
+  assert.equal(payload.models[0].tokens.total, 150);
+  assert.equal(payload.models[0].cost, null);
+  assert.equal(payload.sessions[0].cost, null);
+  assert.ok(Array.isArray(payload.sessions[0].tools));
+  assert.equal(payload.sessions[0].turnEnds.completed, 2);
   assert.equal(payload.trend.unit, 'day');
   assert.equal(payload.trend.buckets.length, 14);
   assert.equal(payload.trend.buckets[13].tokens, 150);
@@ -254,6 +273,61 @@ test('the inherited-prefix mode switches figures without rescanning', async () =
   assert.equal(withInherited.totals.inherited.tokens, 1500);
   assert.equal(calls.listSessions, 1);
   assert.equal(calls.readSession, 1);
+});
+
+test('reads the user price table and reports cost plus budget', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-usage-prices-live-'));
+  const pricesFile = join(directory, 'prices.json');
+  writeFileSync(pricesFile, JSON.stringify({
+    _note: 'test prices, per 1M tokens',
+    currency: 'CNY',
+    budget: { monthly: 100 },
+    prices: { 'deepseek-official/*': { input: 1_000_000, output: 2_000_000, cacheRead: 0, cacheWrite: 0 } },
+  }));
+  const previous = process.env.DSH_USAGE_STATS_PRICES;
+  process.env.DSH_USAGE_STATS_PRICES = pricesFile;
+  try {
+    const { ctx, registered, addPersisted } = fakeContext();
+    addPersisted(HEADER_B, simpleTurn(1, NOW - 1000, NOW - 500, NOW - 100, { inputTokens: 100, outputTokens: 10 }));
+    apply(ctx);
+
+    const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(payload.pricing.configured, true);
+    assert.equal(payload.pricing.currency, 'CNY');
+    assert.equal(payload.pricing.source, pricesFile);
+    assert.equal(payload.pricing.budgetMonthly, 100);
+    assert.equal(payload.costing.configured, true);
+    assert.equal(payload.totals.cost, 120);
+    assert.equal(payload.totals.monthCost, 120, 'the only turn is inside the current month');
+    assert.equal(payload.models[0].cost, 120);
+    assert.equal(payload.sessions[0].cost, 120);
+    assert.equal(payload.trend.buckets[payload.trend.buckets.length - 1].cost, 120);
+    assert.equal(payload.costing.budgetRatio, 1.2);
+  } finally {
+    process.env.DSH_USAGE_STATS_PRICES = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a malformed price table degrades to unconfigured with an error message', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-usage-prices-bad-'));
+  const pricesFile = join(directory, 'prices.json');
+  writeFileSync(pricesFile, '{ not json');
+  const previous = process.env.DSH_USAGE_STATS_PRICES;
+  process.env.DSH_USAGE_STATS_PRICES = pricesFile;
+  try {
+    const { ctx, registered, addPersisted } = fakeContext();
+    addPersisted(HEADER_B, simpleTurn(1, NOW - 1000, NOW - 500, NOW - 100, { inputTokens: 1, outputTokens: 1 }));
+    apply(ctx);
+    const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.pricing.configured, false);
+    assert.match(payload.pricing.error, /JSON/i);
+    assert.equal(payload.totals.cost, null);
+  } finally {
+    process.env.DSH_USAGE_STATS_PRICES = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('serves a scan from the TTL cache, and skips unchanged persisted logs when forced', async () => {
