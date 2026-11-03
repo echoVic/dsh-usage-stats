@@ -29,7 +29,7 @@ const CLIENT_SOURCE = readFileSync(fileURLToPath(new URL('../lib/client.js', imp
  * A v2 payload shaped exactly like the Host route's success body.
  * @returns the fixture.
  */
-function fixtureV3() {
+function fixtureV4() {
   const now = Date.now();
   const dayStart = (daysAgo) => {
     const date = new Date(now);
@@ -38,7 +38,7 @@ function fixtureV3() {
   };
   return {
     ok: true,
-    version: 3,
+    version: 4,
     cached: false,
     cacheAgeMs: 0,
     ttlMs: 15000,
@@ -52,8 +52,18 @@ function fixtureV3() {
       configured: true,
       currency: 'CNY',
       budgetMonthly: 100,
-      source: '/Users/test/.dsh/usage-stats/prices.json',
-      updatedAt: now - 5000,
+      source: {
+        kind: 'auto',
+        url: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing',
+        fetchedAt: now - 3600_000,
+        ttlHours: 24,
+        provider: 'deepseek-official',
+        userFile: '/Users/test/.dsh/usage-stats/prices.json',
+        cacheFile: '/Users/test/.dsh/usage-stats/prices.cache.json',
+      },
+      peakWindows: [[1, 4], [6, 10]],
+      weekdays: [1, 2, 3, 4, 5],
+      warnings: [],
       error: null,
     },
     costing: {
@@ -262,7 +272,7 @@ function fixtureV3() {
  * @returns the fixture.
  */
 function fixtureV2Host() {
-  const data = JSON.parse(JSON.stringify(fixtureV3()));
+  const data = JSON.parse(JSON.stringify(fixtureV4()));
   data.version = 2;
   delete data.pricing;
   delete data.costing;
@@ -349,6 +359,25 @@ function fixtureLegacy() {
     errors: [],
     partial: false,
   };
+}
+
+/**
+ * A v3 Host payload: official/manual provenance was a plain path string and
+ * peak windows were not published yet.
+ * @returns the fixture.
+ */
+function fixtureV3Host() {
+  const data = JSON.parse(JSON.stringify(fixtureV4()));
+  data.version = 3;
+  data.pricing = {
+    configured: true,
+    currency: 'CNY',
+    budgetMonthly: 100,
+    source: '/Users/test/.dsh/usage-stats/prices.json',
+    updatedAt: Date.now() - 5000,
+    error: null,
+  };
+  return data;
 }
 
 /**
@@ -727,7 +756,7 @@ async function renderPanel(localeId, payload) {
 }
 
 test('module face registers one sidebar cell and one addressed main panel', () => {
-  const boot = bootClient('zh', fixtureV3());
+  const boot = bootClient('zh', fixtureV4());
   assert.deepEqual(Array.from(boot.face.inject).sort(), ['locale', 'slots']);
   boot.face.apply(boot.ctx);
 
@@ -750,8 +779,8 @@ test('module face registers one sidebar cell and one addressed main panel', () =
   assert.equal(typeof main.component, 'function');
 });
 
-test('renders the v3 dashboard with every section and without missing locale keys', async () => {
-  const { boot, inspected } = await renderPanel('zh', fixtureV3());
+test('renders the v4 dashboard with every section and without missing locale keys', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV4());
 
   assert.match(inspected.text, /用量统计/);
   assert.match(inspected.text, /总 Token/);
@@ -777,12 +806,14 @@ test('renders the v3 dashboard with every section and without missing locale key
   assert.ok(inspected.markers.includes('budget'));
   assert.equal(inspected.markers.includes('upgrade'), false);
   assert.equal(inspected.markers.includes('drawer'), false);
+  assert.match(inspected.text, /官网价目表/);
+  assert.match(inspected.text, /前更新/);
   assert.match(inspected.text, /修复登录问题/);
   assert.match(inspected.text, /未命名对话/);
   assert.match(inspected.text, /default-workspace/);
   assert.match(inspected.text, /继承 150万/, 'the forked row annotates its inherited prefix');
   assert.match(inspected.text, /LLM 重试 7 次/);
-  assert.doesNotMatch(inspected.text, /重启应用/, 'a v3 payload needs no restart notice');
+  assert.doesNotMatch(inspected.text, /重启应用/, 'a v4 payload needs no restart notice');
   assert.deepEqual([...boot.missing], [], 'every rendered locale key must exist');
   assert.deepEqual(inspected.buggyVars, [], 'theme token references must be well formed');
   assert.ok(inspected.colorValues.length > 0);
@@ -825,8 +856,21 @@ test('renders a v2 Host payload as before, with an upgrade notice for the missin
   assert.deepEqual([...boot.missing], []);
 });
 
+test('renders a v3 Host payload without the price-provenance line', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV3Host());
+
+  assert.match(inspected.text, /模型用量/);
+  assert.match(inspected.text, /预计费用/);
+  assert.ok(inspected.markers.includes('models'));
+  assert.equal(inspected.markers.includes('upgrade'), false);
+  assert.ok(inspected.markers.includes('upgrade-pricing'));
+  assert.match(inspected.text, /重启应用后启用官网价目表/);
+  assert.doesNotMatch(inspected.text, /官网价目表 · /);
+  assert.deepEqual([...boot.missing], []);
+});
+
 test('clicking a conversation row opens the detail drawer', async () => {
-  const boot = bootClient('zh', fixtureV3());
+  const boot = bootClient('zh', fixtureV4());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const main = boot.registrations.find((entry) => entry.options.name === 'main');
@@ -852,7 +896,7 @@ test('clicking a conversation row opens the detail drawer', async () => {
 });
 
 test('renders in English without missing keys', async () => {
-  const { boot, inspected } = await renderPanel('en', fixtureV3());
+  const { boot, inspected } = await renderPanel('en', fixtureV4());
   assert.match(inspected.text, /Usage/);
   assert.match(inspected.text, /Total tokens/);
   assert.match(inspected.text, /Token trend/);
@@ -862,13 +906,14 @@ test('renders in English without missing keys', async () => {
   assert.match(inspected.text, /Model usage/);
   assert.match(inspected.text, /Estimated cost/);
   assert.match(inspected.text, /This month used 92.5%/);
+  assert.match(inspected.text, /Official price table/);
   assert.match(inspected.text, /Conversations/);
   assert.match(inspected.text, /Include fork prefix/);
   assert.deepEqual([...boot.missing], []);
 });
 
 test('the sidebar icon renders an svg for both owner states', () => {
-  const boot = bootClient('zh', fixtureV3());
+  const boot = bootClient('zh', fixtureV4());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const rail = boot.registrations.find((entry) => entry.options.name === 'sidebar.panellist');

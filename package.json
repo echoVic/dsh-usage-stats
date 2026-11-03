@@ -1,8 +1,8 @@
 {
   "name": "@echovic/dsh-usage-stats",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
-  "description": "Usage, runtime, tool cost and token-trend statistics for every DeepSeek Harness conversation, projected from the durable Session logs",
+  "description": "Usage, runtime, tool and token-trend statistics for every DeepSeek Harness conversation, with an auto-fetched official price table (peak/off-peak), monthly budget and per-conversation detail",
   "type": "module",
   "main": "lib/index.js",
   "scripts": {
@@ -29,7 +29,8 @@
     "icon.svg",
     "README.md",
     "LICENSE",
-    "prices.example.json"
+    "prices.example.json",
+    "official-prices.json"
   ],
   "dsh": {
     "bundle": {

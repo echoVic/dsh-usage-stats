@@ -10,17 +10,36 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { apply, RANGE_DAYS, ROUTE } from '../lib/index.js';
 
 const URL_ROOT = 'http://127.0.0.1:50878';
-// Keep the default price lookup deterministic: point it at a file that does
-// not exist unless a test creates one.
-const MISSING_PRICES = join(mkdtempSync(join(tmpdir(), 'dsh-usage-prices-')), 'prices.json');
+// Deterministic price resolution: a scratch DSH_HOME, no automatic fetch unless
+// a test explicitly enables it, and a user table path that does not exist.
+const TEST_HOME = mkdtempSync(join(tmpdir(), 'dsh-usage-home-'));
+mkdirSync(join(TEST_HOME, 'usage-stats'), { recursive: true });
+process.env.DSH_HOME = TEST_HOME;
+process.env.DSH_USAGE_STATS_AUTO_PRICING = '0';
+const MISSING_PRICES = join(TEST_HOME, 'usage-stats', 'prices.json');
 process.env.DSH_USAGE_STATS_PRICES = MISSING_PRICES;
+
+/** A minimal official-pricing table fixture (CNY column set, same shape as the live page). */
+const OFFICIAL_HTML = `<html><body><table>
+<tr><td colspan="3">MODEL PRICING</td><td>deepseek-flash</td><td>deepseek-v4-pro</td></tr>
+<tr><td rowspan="2">1M INPUT TOKENS<br>(CACHE HIT)</td><td>OFF-PEAK</td><td>0.02元</td><td>0.15元</td></tr>
+<tr><td>PEAK</td><td>0.04元</td><td>0.3元</td></tr>
+<tr><td rowspan="2">1M INPUT TOKENS<br>(CACHE MISS)</td><td>OFF-PEAK</td><td>1元</td><td>4.5元</td></tr>
+<tr><td>PEAK</td><td>2元</td><td>9元</td></tr>
+<tr><td rowspan="2">1M OUTPUT TOKENS</td><td>OFF-PEAK</td><td>4元</td><td>13.5元</td></tr>
+<tr><td>PEAK</td><td>8元</td><td>27元</td></tr>
+</table></body></html>`;
+
+/** A turn at a known UTC peak instant (Monday 02:00 UTC). */
+const PEAK_TIME = Date.UTC(2027, 0, 4, 2, 0, 0);
+
 const DAY_MS = 86400000;
 const NOW = Date.now();
 
@@ -168,7 +187,7 @@ test('apply registers one authenticated GET route and one tool on the plugin fib
   assert.equal(calls.listSessions, 0);
 });
 
-test('serves a v3 report with runtime split, trend, tools, turn health and cost metadata', async () => {
+test('serves a v4 report with runtime split, trend, tools, turn health and cost metadata', async () => {
   const { ctx, registered, addLive } = fakeContext();
   const events = [
     ...simpleTurn(1, NOW - 5000, NOW - 3000, NOW - 2000, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30 }),
@@ -187,7 +206,7 @@ test('serves a v3 report with runtime split, trend, tools, turn health and cost 
   const payload = await response.json();
 
   assert.equal(payload.ok, true);
-  assert.equal(payload.version, 3);
+  assert.equal(payload.version, 4);
   assert.equal(payload.range, 'all');
   assert.equal(payload.includeInherited, false);
   assert.equal(payload.scope.listed, 1);
@@ -207,7 +226,7 @@ test('serves a v3 report with runtime split, trend, tools, turn health and cost 
   assert.equal(payload.turnEnds.completed, 2);
   assert.equal(payload.pricing.configured, false, 'no price file means an explicit unconfigured block');
   assert.equal(payload.costing.configured, false);
-  assert.equal(payload.costing.currency, 'USD');
+  assert.equal(payload.costing.currency, 'CNY');
   assert.equal(payload.totals.cost, null);
   assert.equal(payload.models.length, 1);
   assert.equal(payload.models[0].model, 'deepseek-flash');
@@ -294,7 +313,8 @@ test('reads the user price table and reports cost plus budget', async () => {
     const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
     assert.equal(payload.pricing.configured, true);
     assert.equal(payload.pricing.currency, 'CNY');
-    assert.equal(payload.pricing.source, pricesFile);
+    assert.equal(payload.pricing.source.kind, 'manual');
+    assert.equal(payload.pricing.source.userFile, pricesFile);
     assert.equal(payload.pricing.budgetMonthly, 100);
     assert.equal(payload.costing.configured, true);
     assert.equal(payload.totals.cost, 120);
@@ -309,7 +329,7 @@ test('reads the user price table and reports cost plus budget', async () => {
   }
 });
 
-test('a malformed price table degrades to unconfigured with an error message', async () => {
+test('a malformed user price table degrades to unconfigured with an error message', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-usage-prices-bad-'));
   const pricesFile = join(directory, 'prices.json');
   writeFileSync(pricesFile, '{ not json');
@@ -323,10 +343,84 @@ test('a malformed price table degrades to unconfigured with an error message', a
     assert.equal(payload.ok, true);
     assert.equal(payload.pricing.configured, false);
     assert.match(payload.pricing.error, /JSON/i);
+    assert.ok(payload.pricing.warnings.some((warning) => /price table unreadable/.test(warning)));
     assert.equal(payload.totals.cost, null);
   } finally {
     process.env.DSH_USAGE_STATS_PRICES = previous;
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('auto-fetches the official price table and applies the peak tier', async () => {
+  const cacheFile = join(TEST_HOME, 'usage-stats', 'prices.cache.json');
+  rmSync(cacheFile, { force: true });
+  const originalFetch = globalThis.fetch;
+  process.env.DSH_USAGE_STATS_AUTO_PRICING = '1';
+  process.env.DSH_USAGE_STATS_CURRENCY = 'CNY';
+  globalThis.fetch = async () => ({ ok: true, status: 200, async text() { return OFFICIAL_HTML; } });
+  try {
+    const { ctx, registered, addPersisted } = fakeContext();
+    addPersisted(HEADER_B, simpleTurn(
+      1,
+      PEAK_TIME,
+      PEAK_TIME + 500,
+      PEAK_TIME + 1000,
+      { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    ));
+    apply(ctx);
+
+    const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(payload.version, 4);
+    assert.equal(payload.pricing.configured, true);
+    assert.equal(payload.pricing.source.kind, 'auto');
+    assert.equal(payload.pricing.currency, 'CNY');
+    assert.equal(payload.pricing.source.url, 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing');
+    // The turn sits in a Monday 02:00 UTC peak window: flash peak ¥2 input + ¥8 output.
+    assert.equal(payload.totals.cost, 10);
+    assert.equal(payload.models[0].cost, 10);
+    assert.ok(existsSync(cacheFile), 'the official table is cached for the TTL window');
+
+    globalThis.fetch = async () => {
+      throw new Error('offline');
+    };
+    const cached = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(cached.pricing.source.kind, 'cache');
+    assert.equal(cached.totals.cost, 10);
+    assert.ok(cached.pricing.warnings.some((warning) => /refresh failed/.test(warning)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.DSH_USAGE_STATS_AUTO_PRICING = '0';
+    delete process.env.DSH_USAGE_STATS_CURRENCY;
+    rmSync(cacheFile, { force: true });
+  }
+});
+
+test('falls back to the bundled official snapshot when the live page is unreachable', async () => {
+  const cacheFile = join(TEST_HOME, 'usage-stats', 'prices.cache.json');
+  rmSync(cacheFile, { force: true });
+  const originalFetch = globalThis.fetch;
+  process.env.DSH_USAGE_STATS_AUTO_PRICING = '1';
+  globalThis.fetch = async () => {
+    throw new Error('offline');
+  };
+  try {
+    const { ctx, registered, addPersisted } = fakeContext();
+    addPersisted(HEADER_B, simpleTurn(
+      1,
+      PEAK_TIME,
+      PEAK_TIME + 500,
+      PEAK_TIME + 1000,
+      { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    ));
+    apply(ctx);
+    const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(payload.pricing.configured, true);
+    assert.equal(payload.pricing.source.kind, 'bundled');
+    assert.ok(payload.pricing.warnings.some((warning) => /refresh failed/.test(warning)));
+    assert.ok(typeof payload.totals.cost === 'number' && payload.totals.cost > 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.DSH_USAGE_STATS_AUTO_PRICING = '0';
   }
 });
 

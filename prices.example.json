@@ -1,20 +1,21 @@
 {
-  "_note": "复制为 ~/.dsh/usage-stats/prices.json（或用 DSH_USAGE_STATS_PRICES 指定路径）后填写真实价格。价格单位是「每 100 万 tokens」，填 0 或缺失的模型只统计 Token、不计费用。",
+  "_note": "可选文件：默认会自动拉取官网价目表（api-docs.deepseek.com，缓存 24 小时，失败时用内置快照）。此文件只用于覆盖价格或设置月度预算；不需要就删掉。设置 \"auto\": false 可关闭官网自动拉取。",
+  "auto": true,
   "currency": "CNY",
   "budget": {
     "monthly": 100
   },
   "_format": {
-    "provider/model": {
-      "input": "未缓存输入 tokens 单价",
-      "cacheRead": "缓存读 tokens 单价",
-      "cacheWrite": "缓存写 tokens 单价",
-      "output": "输出 tokens 单价"
+    "prices": {
+      "provider/model": {
+        "input": "未缓存输入 tokens 单价（每 100 万，缺省继承 auto 表）",
+        "cacheRead": "缓存读 tokens 单价",
+        "cacheWrite": "缓存写 tokens 单价",
+        "output": "输出 tokens 单价"
+      },
+      "tiered": "也可以写成 { peak: {...}, offPeak: {...} } 覆盖两个时段"
     },
     "wildcards": "支持 provider/*、*/* 和 * 作为兜底"
   },
-  "prices": {
-    "deepseek-official/deepseek-flash": { "input": 0, "cacheRead": 0, "cacheWrite": 0, "output": 0 },
-    "deepseek-official/deepseek-pro": { "input": 0, "cacheRead": 0, "cacheWrite": 0, "output": 0 }
-  }
+  "prices": {}
 }

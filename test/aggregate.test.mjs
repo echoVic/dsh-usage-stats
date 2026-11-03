@@ -576,3 +576,48 @@ test('reports per-session tools and turn endings for the detail drawer', () => {
   assert.equal(report.turnEnds.completed, 2);
   assert.equal(report.turnEnds.error, 1);
 });
+
+test('splits tokens into official peak and off-peak billing tiers', () => {
+  seq = 0;
+  const peak = Date.UTC(2027, 0, 4, 2, 0, 0); // Monday 02:00 UTC — peak
+  const off = Date.UTC(2027, 0, 4, 5, 0, 0); // Monday 05:00 UTC — off-peak
+  const events = [
+    event('turn/start', { turn: 1 }, peak),
+    event('step/start', { turn: 1, step: 1 }, peak + 100),
+    assistantMessage(1, 1, { inputTokens: 1_000_000, outputTokens: 0 }, peak + 300),
+    event('step/end', { turn: 1, step: 1 }, peak + 400),
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, peak + 500),
+    event('turn/start', { turn: 2 }, off),
+    event('step/start', { turn: 2, step: 1 }, off + 100),
+    assistantMessage(2, 1, { inputTokens: 1_000_000, outputTokens: 0 }, off + 300),
+    event('step/end', { turn: 2, step: 1 }, off + 400),
+    event('turn/end', { turn: 2, reason: { kind: 'completed' } }, off + 500),
+  ];
+  const session = analyzeSession(header(), events, { live: false });
+  const entry = Object.values(session.turns[0].models)[0];
+  assert.deepEqual(entry.peakTokens, { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(entry.offPeakTokens, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(entry.tokens, { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 });
+  const second = Object.values(session.turns[1].models)[0];
+  assert.deepEqual(second.peakTokens, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.deepEqual(second.offPeakTokens, { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+  const report = summarize([session], {
+    now: peak,
+    range: 'all',
+    pricing: {
+      configured: true,
+      currency: 'CNY',
+      prices: {
+        'deepseek-official/deepseek-flash': {
+          peak: { input: 2, output: 8 },
+          offPeak: { input: 1, output: 4 },
+        },
+      },
+    },
+  });
+  // 1M peak prompt at ¥2 + 1M off-peak prompt at ¥1.
+  assert.equal(report.totals.cost, 3);
+  assert.equal(report.models[0].cost, 3);
+  assert.equal(report.totals.monthCost, 3);
+});
