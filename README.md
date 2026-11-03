@@ -2,26 +2,13 @@
 
 [![CI](https://github.com/echoVic/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/echoVic/dsh-usage-stats/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/echoVic/dsh-usage-stats?label=release)](https://github.com/echoVic/dsh-usage-stats/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/echoVic/dsh-usage-stats/blob/main/LICENSE)
 
 Conversation usage statistics for the DeepSeek Harness Web shell — a central
 panel (and a matching agent tool) that answers *how much did my conversations
 cost, where did the time go, and what is trending.*
 
-```
-┌ 用量统计 ───────────────────────────────────────────────────────────────────┐
-│ 所有对话的运行时长、Token 与工具调用，直接折叠自持久会话日志                 │
-│ [全部|30天|7天|今天]  [刷新]  [自动刷新]  [计入分支继承]      更新于 20:12   │
-│                                                                             │
-│  总 Token   总运行时长     对话数        步骤 / 工具调用                    │
-│  7.25亿     14 小时 06 分   41           3,176 / 4,055                      │
-│                                                                             │
-│  Token 趋势 ▁▂▃█▆▃   (按日/按小时，柱上悬停看区间明细)                      │
-│  运行时长构成 ████████ 模型 · 工具 · 等待你 · 其他                          │
-│  Token 构成 ███████████░░░░░ 缓存命中率 99.3%                               │
-│  工具消耗排行  bash 2912 次 / 3.4h …     轮次健康 完成 123 · 报错 5 · 重试 9 │
-│  对话明细  [搜索…]  每个对话的时长、步骤、Token、占比，点击打开对话         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![用量统计面板：总览卡片、Token 趋势、运行时长构成、Token 构成、工具消耗排行、轮次健康](https://raw.githubusercontent.com/echoVic/dsh-usage-stats/main/docs/screenshot.png)
 
 ## What it measures
 
@@ -209,3 +196,7 @@ npm test
   step.
 - the Host half runs with the application's local permissions, so read a
   third-party bundle before installing it.
+
+## License
+
+[MIT](https://github.com/echoVic/dsh-usage-stats/blob/main/LICENSE) © 2026 [echovic](https://github.com/echoVic)
