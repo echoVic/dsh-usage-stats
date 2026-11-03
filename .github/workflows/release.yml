@@ -1,0 +1,56 @@
+name: Release
+
+# A pushed v* tag builds the installable tarball, runs the tests, and publishes
+# a GitHub Release. The tag must match package.json's version: bump the version
+# before tagging a release.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Verify tag matches package version
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}"
+            exit 1
+          fi
+
+      - name: Tests
+        run: npm test
+
+      - name: Pack installable tarball
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          sha256sum dist/*.tgz > dist/SHA256SUMS.txt
+          ls -l dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            dist/*.tgz dist/SHA256SUMS.txt

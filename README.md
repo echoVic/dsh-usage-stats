@@ -1,5 +1,8 @@
 # @echovic/dsh-usage-stats
 
+[![CI](https://github.com/echoVic/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/echoVic/dsh-usage-stats/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/echoVic/dsh-usage-stats?label=release)](https://github.com/echoVic/dsh-usage-stats/releases)
+
 Conversation usage statistics for the DeepSeek Harness Web shell — a central
 panel (and a matching agent tool) that answers *how much did my conversations
 cost, where did the time go, and what is trending.*

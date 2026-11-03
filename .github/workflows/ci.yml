@@ -1,0 +1,39 @@
+name: CI
+
+# Push/PR gate: syntax-check both halves and run the three test suites.
+# The package has no dependencies, so the job intentionally skips an install
+# step: it proves the shipped tree is self-contained.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Syntax check
+        run: |
+          for file in lib/index.js lib/aggregate.js lib/client.js; do
+            node --check "$file"
+          done
+
+      - name: Tests (no dependency install needed)
+        run: npm test
