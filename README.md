@@ -196,6 +196,7 @@ npm test
 
 ## Published package
 
+- repository: https://github.com/echoVic/dsh-usage-stats (tags: v0.2.0)
 - npm: https://www.npmjs.com/package/@echovic/dsh-usage-stats
 - install from npm: `plugin_manager({ action: "install_bundle", target: "@echovic/dsh-usage-stats@0.2.0" })`
 - install from git: `plugin_manager({ action: "install_bundle", target: "github:owner/repo#v0.2.0" })`
