@@ -16,6 +16,7 @@ import {
   normalizePriceEntry,
   officialPriceMap,
   parseOfficialPricing,
+  parseServicePricing,
   resolvePricing,
 } from '../lib/pricing.js';
 
@@ -36,6 +37,17 @@ const OFFICIAL_USD = OFFICIAL_CN
   .replace(/2元/g, '$0.3').replace(/9元/g, '$1.32')
   .replace(/4元/g, '$0.6').replace(/13\.5元/g, '$1.98')
   .replace(/8元/g, '$1.2').replace(/27元/g, '$3.96');
+
+const SERVICE_TABLE_CN = `<table><thead><tr><th>API</th><th>计费单位</th><th>价格</th></tr></thead><tbody>
+<tr><td>Search</td><td>每 1,000 次成功请求</td><td>5元</td></tr>
+<tr><td>Fetch</td><td>每 1,000 次成功请求</td><td>5元</td></tr>
+</tbody></table>`;
+const SERVICE_TABLE_USD = `<table><thead><tr><th>API</th><th>Unit</th><th>Price</th></tr></thead><tbody>
+<tr><td>Search</td><td>Per 1,000 successful requests</td><td>$0.75</td></tr>
+<tr><td>Fetch</td><td>Per 1,000 successful requests</td><td>$0.75</td></tr>
+</tbody></table>`;
+const OFFICIAL_CN_WITH_SERVICES = OFFICIAL_CN.replace('</body>', `${SERVICE_TABLE_CN}</body>`);
+const OFFICIAL_USD_WITH_SERVICES = OFFICIAL_USD.replace('</body>', `${SERVICE_TABLE_USD}</body>`);
 
 const PEAK_TIME = Date.UTC(2027, 0, 4, 2, 0, 0); // Monday 02:00 UTC
 
@@ -62,16 +74,24 @@ function scratch() {
 }
 
 test('parses the official CNY and USD tables with peak/off-peak tiers', () => {
-  const cny = parseOfficialPricing(OFFICIAL_CN);
+  const cny = parseOfficialPricing(OFFICIAL_CN_WITH_SERVICES);
   assert.equal(cny.currency, 'CNY');
   assert.deepEqual(cny.models['deepseek-flash'].peak, { input: 2, cacheRead: 0.04, cacheWrite: 2, output: 8 });
   assert.deepEqual(cny.models['deepseek-flash'].offPeak, { input: 1, cacheRead: 0.02, cacheWrite: 1, output: 4 });
   assert.deepEqual(cny.models['deepseek-v4-pro'].offPeak, { input: 4.5, cacheRead: 0.15, cacheWrite: 4.5, output: 13.5 });
 
-  const usd = parseOfficialPricing(OFFICIAL_USD);
+  assert.deepEqual(cny.services, { currency: 'CNY', unit: 1000, search: 5, fetch: 5 });
+  const usd = parseOfficialPricing(OFFICIAL_USD_WITH_SERVICES);
   assert.equal(usd.currency, 'USD');
+  assert.deepEqual(usd.services, { currency: 'USD', unit: 1000, search: 0.75, fetch: 0.75 });
   assert.deepEqual(usd.models['deepseek-flash'].peak, { input: 0.3, cacheRead: 0.006, cacheWrite: 0.3, output: 1.2 });
   assert.deepEqual(usd.models['deepseek-v4-pro'].offPeak, { input: 0.66, cacheRead: 0.022, cacheWrite: 0.66, output: 1.98 });
+});
+
+test('parses the Search/Fetch per-1,000-request prices', () => {
+  assert.deepEqual(parseServicePricing(SERVICE_TABLE_CN), { currency: 'CNY', unit: 1000, search: 5, fetch: 5 });
+  assert.deepEqual(parseServicePricing(SERVICE_TABLE_USD), { currency: 'USD', unit: 1000, search: 0.75, fetch: 0.75 });
+  assert.equal(parseServicePricing('<table><tr><td>Search</td></tr></table>'), undefined);
 });
 
 test('rejects a page without the pricing table', () => {
@@ -108,7 +128,7 @@ test('resolution ladder: fetch, cache, bundled, manual override', async () => {
     // 1. Live fetch.
     const auto = await resolvePricing({
       ...scratchDir.paths,
-      fetchImpl: fetchHtml(OFFICIAL_CN),
+      fetchImpl: fetchHtml(OFFICIAL_CN_WITH_SERVICES),
       envCurrency: 'CNY',
     });
     assert.equal(auto.configured, true);
@@ -116,6 +136,11 @@ test('resolution ladder: fetch, cache, bundled, manual override', async () => {
     assert.equal(auto.source.kind, 'auto');
     assert.equal(auto.source.url, 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing');
     assert.deepEqual(auto.prices['deepseek-official/deepseek-flash'].peak.input, 2);
+    assert.equal(auto.services.search.pricePerThousand, 5);
+    assert.equal(auto.services.search.billed, true, 'harness search goes through the billed Search API');
+    assert.equal(auto.services.fetch.pricePerThousand, 5);
+    assert.equal(auto.services.fetch.billed, false, 'the shipped fetch provider is a local HTTP fetch');
+    assert.equal(auto.servicesConfigured, true);
     assert.ok(existsSync(scratchDir.paths.cacheFile), 'the fetched table is cached');
 
     // 2. Fresh cache, no fetch (fetchImpl throws).
@@ -157,12 +182,16 @@ test('resolution ladder: fetch, cache, bundled, manual override', async () => {
     writeFileSync(scratchDir.paths.userFile, JSON.stringify({
       budget: { monthly: 100 },
       prices: { 'deepseek-official/deepseek-flash': { input: 9, output: 9 } },
+      services: { search: { pricePerThousand: 3 }, fetch: { pricePerThousand: 1, billed: true } },
     }));
-    const mixed = await resolvePricing({ ...scratchDir.paths, fetchImpl: fetchHtml(OFFICIAL_CN), envCurrency: 'CNY' });
+    const mixed = await resolvePricing({ ...scratchDir.paths, fetchImpl: fetchHtml(OFFICIAL_CN_WITH_SERVICES), envCurrency: 'CNY' });
     assert.equal(mixed.source.kind, 'mixed');
     assert.deepEqual(mixed.prices['deepseek-official/deepseek-flash'].peak, { input: 9, cacheRead: 0, cacheWrite: 0, output: 9 });
     assert.deepEqual(mixed.prices['deepseek-official/deepseek-v4-pro'].peak, { input: 9, cacheRead: 0.3, cacheWrite: 9, output: 27 });
     assert.equal(mixed.budgetMonthly, 100);
+    assert.equal(mixed.services.search.pricePerThousand, 3, 'manual service prices override the official ones');
+    assert.equal(mixed.services.fetch.pricePerThousand, 1);
+    assert.equal(mixed.services.fetch.billed, true, 'a billable Fetch provider can be opted in');
 
     // 6. Auto disabled: manual only.
     const manualOnly = await resolvePricing({ ...scratchDir.paths, envAuto: false });

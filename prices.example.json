@@ -15,7 +15,11 @@
       },
       "tiered": "也可以写成 { peak: {...}, offPeak: {...} } 覆盖两个时段"
     },
-    "wildcards": "支持 provider/*、*/* 和 * 作为兜底"
+    "wildcards": "支持 provider/*、*/* 和 * 作为兜底",
+    "services": {
+      "search": "每 1,000 次成功请求的 Search 价格；缺省用官网价，可写数字或 { pricePerThousand, billed }",
+      "fetch": "Fetch 每 1,000 次请求价格；本 Harness 的 web_fetch 为本地 HTTP 抓取，默认不计费（billed:false），换用计费 Fetch 提供方时可设 billed:true"
+    }
   },
   "prices": {}
 }

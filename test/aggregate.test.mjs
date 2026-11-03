@@ -621,3 +621,53 @@ test('splits tokens into official peak and off-peak billing tiers', () => {
   assert.equal(report.models[0].cost, 3);
   assert.equal(report.totals.monthCost, 3);
 });
+
+test('counts Search requests and Fetch calls and bills Search per 1,000 requests', () => {
+  seq = 0;
+  const base = NOW - 5000; // inside the current month, so the budget sees it
+  const events = [
+    event('turn/start', { turn: 1 }, base),
+    event('step/start', { turn: 1, step: 1 }, base + 100),
+    assistantMessage(1, 1, { inputTokens: 1000, outputTokens: 0 }, base + 500),
+    event('step/end', { turn: 1, step: 1 }, base + 510),
+    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 600),
+    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 700),
+    event('tool/call', { turn: 1, step: 2, callId: 'f1', name: 'web_fetch', arguments: '{}' }, base + 800),
+    event('tool/call', { turn: 1, step: 2, callId: 'f2', name: 'web_fetch', arguments: '{}' }, base + 900),
+    event('tool/call', { turn: 1, step: 2, callId: 'f3', name: 'web_fetch', arguments: '{}' }, base + 1000),
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, base + 1100),
+  ];
+  const session = analyzeSession(header(), events, { live: false });
+  assert.deepEqual(session.turns[0].services, { search: 2, fetch: 3 });
+
+  const report = summarize([session], {
+    now: NOW,
+    range: 'all',
+    pricing: {
+      configured: true,
+      currency: 'CNY',
+      prices: { 'deepseek-official/deepseek-flash': { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      services: {
+        search: { pricePerThousand: 5, billed: true },
+        fetch: { pricePerThousand: 5, billed: false },
+      },
+    },
+  });
+
+  const search = report.services.find((service) => service.kind === 'search');
+  const fetch = report.services.find((service) => service.kind === 'fetch');
+  assert.equal(search.calls, 2);
+  assert.equal(search.billed, true);
+  assert.equal(search.pricePerThousand, 5);
+  assert.ok(Math.abs(search.cost - (2 / 1000) * 5) < 1e-12);
+  assert.equal(fetch.calls, 3);
+  assert.equal(fetch.billed, false);
+  assert.equal(fetch.cost, null, 'the local Fetch provider is not billed');
+  assert.deepEqual(report.totals.services, { search: 2, fetch: 3 });
+  assert.deepEqual(report.sessions[0].services, { search: 2, fetch: 3 });
+  // model cost 1000 input × ¥1/M = 0.001, plus Search 2 requests × ¥5/1k = 0.01.
+  assert.ok(Math.abs(report.totals.cost - 0.011) < 1e-12);
+  assert.ok(Math.abs(report.totals.monthCost - 0.011) < 1e-12);
+  assert.ok(Math.abs(report.costing.serviceCost - 0.01) < 1e-12);
+  assert.equal(report.costing.servicesConfigured, true);
+});

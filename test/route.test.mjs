@@ -35,7 +35,12 @@ const OFFICIAL_HTML = `<html><body><table>
 <tr><td>PEAK</td><td>2元</td><td>9元</td></tr>
 <tr><td rowspan="2">1M OUTPUT TOKENS</td><td>OFF-PEAK</td><td>4元</td><td>13.5元</td></tr>
 <tr><td>PEAK</td><td>8元</td><td>27元</td></tr>
-</table></body></html>`;
+</table>
+<table><thead><tr><th>API</th><th>计费单位</th><th>价格</th></tr></thead><tbody>
+<tr><td>Search</td><td>每 1,000 次成功请求</td><td>5元</td></tr>
+<tr><td>Fetch</td><td>每 1,000 次成功请求</td><td>5元</td></tr>
+</tbody></table>
+</body></html>`;
 
 /** A turn at a known UTC peak instant (Monday 02:00 UTC). */
 const PEAK_TIME = Date.UTC(2027, 0, 4, 2, 0, 0);
@@ -187,7 +192,7 @@ test('apply registers one authenticated GET route and one tool on the plugin fib
   assert.equal(calls.listSessions, 0);
 });
 
-test('serves a v4 report with runtime split, trend, tools, turn health and cost metadata', async () => {
+test('serves a v5 report with runtime split, trend, tools, services, turn health and cost metadata', async () => {
   const { ctx, registered, addLive } = fakeContext();
   const events = [
     ...simpleTurn(1, NOW - 5000, NOW - 3000, NOW - 2000, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30 }),
@@ -206,7 +211,7 @@ test('serves a v4 report with runtime split, trend, tools, turn health and cost 
   const payload = await response.json();
 
   assert.equal(payload.ok, true);
-  assert.equal(payload.version, 4);
+  assert.equal(payload.version, 5);
   assert.equal(payload.range, 'all');
   assert.equal(payload.includeInherited, false);
   assert.equal(payload.scope.listed, 1);
@@ -235,6 +240,11 @@ test('serves a v4 report with runtime split, trend, tools, turn health and cost 
   assert.equal(payload.sessions[0].cost, null);
   assert.ok(Array.isArray(payload.sessions[0].tools));
   assert.equal(payload.sessions[0].turnEnds.completed, 2);
+  assert.deepEqual(payload.services.map((service) => ({ kind: service.kind, calls: service.calls })), [
+    { kind: 'search', calls: 0 },
+    { kind: 'fetch', calls: 0 },
+  ]);
+  assert.deepEqual(payload.totals.services, { search: 0, fetch: 0 });
   assert.equal(payload.trend.unit, 'day');
   assert.equal(payload.trend.buckets.length, 14);
   assert.equal(payload.trend.buckets[13].tokens, 150);
@@ -370,11 +380,14 @@ test('auto-fetches the official price table and applies the peak tier', async ()
     apply(ctx);
 
     const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
-    assert.equal(payload.version, 4);
+    assert.equal(payload.version, 5);
     assert.equal(payload.pricing.configured, true);
     assert.equal(payload.pricing.source.kind, 'auto');
     assert.equal(payload.pricing.currency, 'CNY');
     assert.equal(payload.pricing.source.url, 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing');
+    assert.equal(payload.pricing.services.search.pricePerThousand, 5);
+    assert.equal(payload.pricing.services.search.billed, true);
+    assert.equal(payload.pricing.services.fetch.billed, false);
     // The turn sits in a Monday 02:00 UTC peak window: flash peak ¥2 input + ¥8 output.
     assert.equal(payload.totals.cost, 10);
     assert.equal(payload.models[0].cost, 10);
@@ -421,6 +434,52 @@ test('falls back to the bundled official snapshot when the live page is unreacha
   } finally {
     globalThis.fetch = originalFetch;
     process.env.DSH_USAGE_STATS_AUTO_PRICING = '0';
+  }
+});
+
+test('counts Search/Fetch usage and bills Search per 1,000 requests', async () => {
+  const pricesFile = join(TEST_HOME, 'usage-stats', 'prices.json');
+  writeFileSync(pricesFile, JSON.stringify({
+    currency: 'CNY',
+    services: {
+      search: { pricePerThousand: 5, billed: true },
+      fetch: { pricePerThousand: 5, billed: false },
+    },
+  }));
+  const originalPrices = process.env.DSH_USAGE_STATS_PRICES;
+  process.env.DSH_USAGE_STATS_PRICES = pricesFile;
+  try {
+    const { ctx, registered, addPersisted } = fakeContext();
+    const start = NOW - 5000;
+    const turnEvents = simpleTurn(1, start, start + 400, start + 500, { inputTokens: 100, outputTokens: 0 });
+    turnEvents.pop(); // keep the turn open while the search/fetch work happens
+    addPersisted(HEADER_B, [
+      ...turnEvents,
+      event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, start + 600),
+      event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, start + 610),
+      event('tool/call', { turn: 1, step: 2, callId: 'f1', name: 'web_fetch', arguments: '{}' }, start + 700),
+      event('tool/call', { turn: 1, step: 2, callId: 'f2', name: 'web_fetch', arguments: '{}' }, start + 710),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, start + 800),
+    ]);
+    apply(ctx);
+    const payload = await (await registered[0].fetch(new Request(`${URL_ROOT}${ROUTE}?force=1`))).json();
+    assert.equal(payload.version, 5);
+    const search = payload.services.find((service) => service.kind === 'search');
+    const fetch = payload.services.find((service) => service.kind === 'fetch');
+    assert.equal(search.calls, 2);
+    assert.equal(search.billed, true);
+    assert.ok(Math.abs(search.cost - 0.01) < 1e-12);
+    assert.equal(fetch.calls, 2);
+    assert.equal(fetch.billed, false);
+    assert.equal(fetch.cost, null);
+    assert.deepEqual(payload.totals.services, { search: 2, fetch: 2 });
+    assert.ok(Math.abs(payload.costing.serviceCost - 0.01) < 1e-12);
+    assert.equal(payload.costing.servicesConfigured, true);
+    assert.ok(payload.totals.cost >= search.cost);
+  } finally {
+    if (originalPrices === undefined) delete process.env.DSH_USAGE_STATS_PRICES;
+    else process.env.DSH_USAGE_STATS_PRICES = originalPrices;
+    rmSync(pricesFile, { force: true });
   }
 });
 

@@ -29,7 +29,7 @@ const CLIENT_SOURCE = readFileSync(fileURLToPath(new URL('../lib/client.js', imp
  * A v2 payload shaped exactly like the Host route's success body.
  * @returns the fixture.
  */
-function fixtureV4() {
+function fixtureV5() {
   const now = Date.now();
   const dayStart = (daysAgo) => {
     const date = new Date(now);
@@ -38,7 +38,7 @@ function fixtureV4() {
   };
   return {
     ok: true,
-    version: 4,
+    version: 5,
     cached: false,
     cacheAgeMs: 0,
     ttlMs: 15000,
@@ -61,6 +61,10 @@ function fixtureV4() {
         userFile: '/Users/test/.dsh/usage-stats/prices.json',
         cacheFile: '/Users/test/.dsh/usage-stats/prices.cache.json',
       },
+      services: {
+        search: { pricePerThousand: 5, billed: true },
+        fetch: { pricePerThousand: 5, billed: false },
+      },
       peakWindows: [[1, 4], [6, 10]],
       weekdays: [1, 2, 3, 4, 5],
       warnings: [],
@@ -74,6 +78,8 @@ function fixtureV4() {
       monthCost: 92.5,
       budgetRatio: 0.925,
       unpricedModels: ['unknown/provider'],
+      serviceCost: 1.5,
+      servicesConfigured: true,
     },
     totals: {
       sessions: 2,
@@ -99,9 +105,11 @@ function fixtureV4() {
         total: 10_604_935,
       },
       cacheHitRate: 0.8773,
-      cost: 58.25,
+      cost: 59.75,
       monthTokens: 900_000_000,
       monthCost: 92.5,
+      services: { search: 300, fetch: 56 },
+      serviceCost: 1.5,
       inherited: { tokens: 30_571_706, runTimeMs: 1_576_165, turns: 3, steps: 9 },
       firstActivityAt: now - 30 * 86400000,
       lastActivityAt: now - 60_000,
@@ -141,8 +149,10 @@ function fixtureV4() {
           total: 7_210_000,
         },
         cacheHitRate: 0.868,
-        cost: 40.1,
+        cost: 41.6,
         unpriced: false,
+        services: { search: 300, fetch: 40 },
+        serviceCost: 1.5,
         models: [
           {
             provider: 'deepseek-official',
@@ -204,6 +214,8 @@ function fixtureV4() {
         cacheHitRate: 0.8959,
         cost: 18.15,
         unpriced: true,
+        services: { search: 0, fetch: 16 },
+        serviceCost: null,
         models: [],
         tools: [],
         turnEnds: { completed: 24, aborted: 0, interrupted: 0, error: 0, maxTokens: 0, blocked: 0, forked: 0, other: 0, open: 0 },
@@ -250,6 +262,10 @@ function fixtureV4() {
         cost: null,
       },
     ],
+    services: [
+      { kind: 'search', calls: 300, billed: true, pricePerThousand: 5, cost: 1.5 },
+      { kind: 'fetch', calls: 56, billed: false, pricePerThousand: 5, cost: null },
+    ],
     turnEnds: {
       completed: 38,
       aborted: 2,
@@ -272,19 +288,24 @@ function fixtureV4() {
  * @returns the fixture.
  */
 function fixtureV2Host() {
-  const data = JSON.parse(JSON.stringify(fixtureV4()));
+  const data = JSON.parse(JSON.stringify(fixtureV5()));
   data.version = 2;
   delete data.pricing;
   delete data.costing;
   delete data.totals.cost;
   delete data.totals.monthTokens;
   delete data.totals.monthCost;
+  delete data.services;
+  delete data.totals.services;
+  delete data.totals.serviceCost;
   for (const bucket of data.trend.buckets) delete bucket.cost;
   for (const row of data.sessions) {
     delete row.cost;
     delete row.unpriced;
     delete row.tools;
     delete row.turnEnds;
+    delete row.services;
+    delete row.serviceCost;
     for (const model of row.models) {
       delete model.tokens;
       delete model.cacheHitRate;
@@ -367,7 +388,7 @@ function fixtureLegacy() {
  * @returns the fixture.
  */
 function fixtureV3Host() {
-  const data = JSON.parse(JSON.stringify(fixtureV4()));
+  const data = JSON.parse(JSON.stringify(fixtureV5()));
   data.version = 3;
   data.pricing = {
     configured: true,
@@ -377,6 +398,35 @@ function fixtureV3Host() {
     updatedAt: Date.now() - 5000,
     error: null,
   };
+  delete data.services;
+  delete data.totals.services;
+  delete data.totals.serviceCost;
+  delete data.costing.serviceCost;
+  delete data.costing.servicesConfigured;
+  for (const row of data.sessions) {
+    delete row.services;
+    delete row.serviceCost;
+  }
+  return data;
+}
+
+/**
+ * A v4 Host payload: official pricing exists, but Search/Fetch usage does not.
+ * @returns the fixture.
+ */
+function fixtureV4Host() {
+  const data = JSON.parse(JSON.stringify(fixtureV5()));
+  data.version = 4;
+  delete data.services;
+  delete data.totals.services;
+  delete data.totals.serviceCost;
+  delete data.costing.serviceCost;
+  delete data.costing.servicesConfigured;
+  delete data.pricing.services;
+  for (const row of data.sessions) {
+    delete row.services;
+    delete row.serviceCost;
+  }
   return data;
 }
 
@@ -756,7 +806,7 @@ async function renderPanel(localeId, payload) {
 }
 
 test('module face registers one sidebar cell and one addressed main panel', () => {
-  const boot = bootClient('zh', fixtureV4());
+  const boot = bootClient('zh', fixtureV5());
   assert.deepEqual(Array.from(boot.face.inject).sort(), ['locale', 'slots']);
   boot.face.apply(boot.ctx);
 
@@ -779,8 +829,8 @@ test('module face registers one sidebar cell and one addressed main panel', () =
   assert.equal(typeof main.component, 'function');
 });
 
-test('renders the v4 dashboard with every section and without missing locale keys', async () => {
-  const { boot, inspected } = await renderPanel('zh', fixtureV4());
+test('renders the v5 dashboard with every section and without missing locale keys', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV5());
 
   assert.match(inspected.text, /用量统计/);
   assert.match(inspected.text, /总 Token/);
@@ -804,8 +854,14 @@ test('renders the v4 dashboard with every section and without missing locale key
   assert.ok(inspected.markers.includes('tools'));
   assert.ok(inspected.markers.includes('turns'));
   assert.ok(inspected.markers.includes('budget'));
+  assert.ok(inspected.markers.includes('services'));
   assert.equal(inspected.markers.includes('upgrade'), false);
+  assert.equal(inspected.markers.includes('upgrade-services'), false);
   assert.equal(inspected.markers.includes('drawer'), false);
+  assert.match(inspected.text, /搜索与抓取/);
+  assert.match(inspected.text, /300/);
+  assert.match(inspected.text, /CNY 1\.50/);
+  assert.match(inspected.text, /本地抓取，不计费/);
   assert.match(inspected.text, /官网价目表/);
   assert.match(inspected.text, /前更新/);
   assert.match(inspected.text, /刷新官网价格/, 'the footer offers an explicit official-price refresh action');
@@ -814,7 +870,7 @@ test('renders the v4 dashboard with every section and without missing locale key
   assert.match(inspected.text, /default-workspace/);
   assert.match(inspected.text, /继承 150万/, 'the forked row annotates its inherited prefix');
   assert.match(inspected.text, /LLM 重试 7 次/);
-  assert.doesNotMatch(inspected.text, /重启应用/, 'a v4 payload needs no restart notice');
+  assert.doesNotMatch(inspected.text, /重启应用/, 'a v5 payload needs no restart notice');
   assert.deepEqual([...boot.missing], [], 'every rendered locale key must exist');
   assert.deepEqual(inspected.buggyVars, [], 'theme token references must be well formed');
   assert.ok(inspected.colorValues.length > 0);
@@ -871,8 +927,18 @@ test('renders a v3 Host payload without the price-provenance line', async () => 
   assert.deepEqual([...boot.missing], []);
 });
 
+test('renders a v4 Host payload without Search/Fetch usage, with a restart notice', async () => {
+  const { boot, inspected } = await renderPanel('zh', fixtureV4Host());
+
+  assert.ok(inspected.markers.includes('upgrade-services'));
+  assert.match(inspected.text, /重启应用后启用搜索\/抓取计费/);
+  assert.ok(inspected.markers.includes('models'));
+  assert.equal(inspected.markers.includes('services'), false);
+  assert.deepEqual([...boot.missing], []);
+});
+
 test('clicking a conversation row opens the detail drawer', async () => {
-  const boot = bootClient('zh', fixtureV4());
+  const boot = bootClient('zh', fixtureV5());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const main = boot.registrations.find((entry) => entry.options.name === 'main');
@@ -898,7 +964,7 @@ test('clicking a conversation row opens the detail drawer', async () => {
 });
 
 test('the official-price refresh copy refetches with force=1', async () => {
-  const boot = bootClient('zh', fixtureV4());
+  const boot = bootClient('zh', fixtureV5());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const main = boot.registrations.find((entry) => entry.options.name === 'main');
@@ -920,7 +986,7 @@ test('the official-price refresh copy refetches with force=1', async () => {
 });
 
 test('renders in English without missing keys', async () => {
-  const { boot, inspected } = await renderPanel('en', fixtureV4());
+  const { boot, inspected } = await renderPanel('en', fixtureV5());
   assert.match(inspected.text, /Usage/);
   assert.match(inspected.text, /Total tokens/);
   assert.match(inspected.text, /Token trend/);
@@ -932,13 +998,15 @@ test('renders in English without missing keys', async () => {
   assert.match(inspected.text, /This month used 92.5%/);
   assert.match(inspected.text, /Official price table/);
   assert.match(inspected.text, /Refresh official prices/);
+  assert.match(inspected.text, /Search & Fetch/);
+  assert.match(inspected.text, /Local fetch, unbilled/);
   assert.match(inspected.text, /Conversations/);
   assert.match(inspected.text, /Include fork prefix/);
   assert.deepEqual([...boot.missing], []);
 });
 
 test('the sidebar icon renders an svg for both owner states', () => {
-  const boot = bootClient('zh', fixtureV4());
+  const boot = bootClient('zh', fixtureV5());
   boot.face.apply(boot.ctx);
   for (const injection of boot.injections) injection.callback();
   const rail = boot.registrations.find((entry) => entry.options.name === 'sidebar.panellist');

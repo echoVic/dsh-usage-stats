@@ -8,7 +8,8 @@ Conversation usage statistics for the DeepSeek Harness Web shell — a central
 panel (and a matching agent tool) that answers *how much did my conversations
 cost, where did the time go, and what is trending.* Per-model token accounting,
 an automatically fetched official price table (with peak/off-peak billing and a
-monthly budget) and a per-conversation detail drawer are part of the surface.
+monthly budget), Search/Fetch per-request costs, and a per-conversation detail
+drawer are part of the surface.
 
 ![用量统计面板：总览卡片、Token 趋势、运行时长构成、Token 构成、工具消耗排行、轮次健康](https://raw.githubusercontent.com/echoVic/dsh-usage-stats/main/docs/screenshot.png)
 
@@ -89,6 +90,34 @@ token buckets are split into peak/off-peak while folding the log, so the cost
 follows when the work actually ran rather than when the panel was opened.
 Chinese statutory holidays are **not** modeled — the classifier only knows
 weekdays — which is the one deliberate approximation here.
+
+### Search & Fetch per-request billing
+
+The official page prices the standalone Search and Fetch APIs **per 1,000
+successful requests** (currently ¥5 / $0.75 each). The plugin counts them from
+the session log and includes them in the cost, month-to-date and budget:
+
+| Service | Counted from | Billed? |
+|---|---|---|
+| Search | `web/deepseek-search-llm-request` events — one outbound Search API request each (a `web_search` call can issue 2–4) | yes, official rate per 1,000 requests |
+| Fetch | `web_fetch` tool calls | no by default — the shipped `web-fetch-http` provider performs a local HTTP fetch, not a Fetch API request |
+
+The user file can override the counts' prices or opt Fetch into billing for a
+composition that uses a billable Fetch provider:
+
+```json
+{
+  "services": {
+    "search": { "pricePerThousand": 5, "billed": true },
+    "fetch": { "pricePerThousand": 5, "billed": true }
+  }
+}
+```
+
+A per-request count is exact; the *successful* qualifier is approximated — every
+outbound Search request in the log is counted, including any that failed (the
+log does not record per-request success). This affects cost by at most the
+failure rate.
 
 ### Optional user overrides and budget
 
@@ -178,21 +207,25 @@ GET /api/usage-stats.summary
     &inherited=1                (include a fork's inherited prefix; default off)
     &offset=<minutes east UTC>  (local day/hour buckets; default 0)
     &force=1                    (bypass the corpus TTL cache and refresh the price table)
-→ 200 { ok, version: 4, cached, cacheAgeMs, ttlMs, generatedAt, scanMs,
+→ 200 { ok, version: 5, cached, cacheAgeMs, ttlMs, generatedAt, scanMs,
         range, includeInherited, offsetMinutes,
         scope: { listed, analyzed, failed, live, subagents },
         pricing: { configured, currency, budgetMonthly,
                    source: { kind: 'auto'|'cache'|'bundled'|'mixed'|'manual',
                              url, fetchedAt, ttlHours, provider, userFile, cacheFile },
+                   services: { search: { pricePerThousand, billed },
+                               fetch: { pricePerThousand, billed } },
                    peakWindows, weekdays, warnings: [], error },
         costing: { configured, currency, budgetMonthly, monthTokens, monthCost,
-                   budgetRatio, unpricedModels: [ 'provider/model', … ] },
+                   budgetRatio, unpricedModels: [ 'provider/model', … ],
+                   serviceCost, servicesConfigured },
         totals: { sessions, liveSessions, subagentSessions,
                   runTimeMs, modelMs, toolMs, humanWaitMs, otherMs,
                   turns, steps, toolCalls, retries, userMessages,
                   assistantMessages,
                   tokens { input, output, cacheRead, cacheWrite, prompt, total },
                   cacheHitRate, cost, monthTokens, monthCost,
+                  services: { search, fetch }, serviceCost,
                   inherited { tokens, runTimeMs, turns, steps },
                   firstActivityAt, lastActivityAt },
         sessions: [ { id, title, createdAt, lastActiveAt, live, parentSession,
@@ -200,11 +233,13 @@ GET /api/usage-stats.summary
                       agentPreset, eventCount, runTimeMs, modelMs, toolMs,
                       humanWaitMs, otherMs, turns, steps, toolCalls, retries,
                       userMessages, assistantMessages, tokens, cacheHitRate,
-                      cost, unpriced, models, tools, turnEnds, inherited } ],
+                      cost, unpriced, services, serviceCost, models, tools,
+                      turnEnds, inherited } ],
         trend: { unit: 'day'|'hour', buckets: [ { start, tokens, runTimeMs,
                   steps, toolCalls, cost, sessions } ] },
         tools: [ { name, calls, ms, errors } ],
         models: [ { provider, model, calls, tokens, cacheHitRate, cost } ],
+        services: [ { kind, calls, billed, pricePerThousand, cost } ],
         turnEnds: { completed, aborted, interrupted, error, maxTokens,
                     blocked, forked, other, open },
         errors: [ { sessionId, message } ], partial }
@@ -244,25 +279,27 @@ cd <checkout>
 npm test
 ```
 
-- `test/aggregate.test.mjs` (19) — the folds against synthetic event logs: the
+- `test/aggregate.test.mjs` (20) — the folds against synthetic event logs: the
   four-way split (including parallel tools and approval-inside-tool), token
   replacement/retry semantics, per-route token attribution, peak/off-peak token
   splitting, tiered cost, wildcard resolution, range-independent month-to-date
   cost, turn endings, open turns, range clipping, local day/hour trend buckets,
-  per-session tool/turn detail, and the inherited-prefix mode;
-- `test/pricing.test.mjs` (6) — official-page parsing (CNY and USD fixtures),
+  per-session tool/turn detail, Search/Fetch request counting and per-1,000
+  service billing, and the inherited-prefix mode;
+- `test/pricing.test.mjs` (8) — official-page parsing (CNY and USD fixtures),
   user-entry normalization, the peak-hour calendar, and the resolution ladder
+  Search/Fetch service-price parsing and overrides, and the resolution ladder
   (live fetch → cache → bundled snapshot → manual override → malformed file);
-- `test/route.test.mjs` (15) — `apply()` registration, the Fetch handler,
+- `test/route.test.mjs` (16) — `apply()` registration, the Fetch handler,
   range/inherited parameters, manual and auto-fetched pricing (including a
-  mocked official page and the offline fallback), the corpus TTL cache,
+  mocked official page and the offline fallback), Search/Fetch billing, the corpus TTL cache,
   revision-aware per-session reuse, failure isolation and the agent tool;
-- `test/client.test.mjs` (9) — boots the real browser module in a `vm` with a
+- `test/client.test.mjs` (11) — boots the real browser module in a `vm` with a
   stateful React double, renders the full v4 dashboard in zh and en, opens the
-  detail drawer by clicking a conversation row, checks the v3/v2-payload
-  compatibility notices, and renders the legacy v1 payload with its restart
-  notice, asserting both slot registrations, complete locale dictionaries and
-  theme-token-only colors.
+  detail drawer by clicking a conversation row, renders the Search & Fetch
+  section, checks the v4/v3/v2-payload compatibility notices, and renders the
+  legacy v1 payload with its restart notice, asserting both slot registrations,
+  complete locale dictionaries and theme-token-only colors.
 
 ## Known limits
 
@@ -274,6 +311,12 @@ npm test
   reported as unpriced); the month figure is local-calendar based.
 - Peak/off-peak classification knows weekdays only — Chinese statutory holidays
   are billed as off-peak even though the official page excludes them from peak.
+- Search cost counts outbound Search API requests from the log; the billing unit
+  is *successful* requests, and per-request success is not recorded, so failed
+  requests are counted too (bounded by the failure rate).
+- `web_fetch` runs through the local HTTP provider and is unbilled by default;
+  opt into Fetch billing via `services.fetch.billed` only for a billable Fetch
+  provider.
 - When both the live page and a fresh cache are unavailable, the bundled
   `official-prices.json` snapshot is used until a refresh succeeds.
 - Runtime is turn wall time — it includes human waits and queueing; the split
