@@ -146,6 +146,9 @@ cp prices.example.json ~/.dsh/usage-stats/prices.json   # optional
 - `budget.monthly` (same currency) drives the 80% warning / 100% over-budget
   banner and the month-to-date figure, which is computed from the whole corpus
   regardless of the panel's selected range.
+- The **区间费用 / Range cost** card is the estimated cost of the selected range
+  (it changes when the range tab changes); the month-to-date figure and budget
+  progress stay in its hint, and the budget alerts remain month-based.
 - **Partial cost is explicit**: a model without a price still reports tokens; it
   is listed in `costing.unpricedModels`, the footer says how many are unpriced,
   and its row cost shows `—` instead of a fake zero.
@@ -221,7 +224,9 @@ to aggregate the report). Several layers keep that latency out of the way:
   button still waits for the fresh fetch.
 - **Loading UI**: a skeleton with a first-load hint (initial load), a slim
   updating bar plus the existing content during refreshes, and a footer line
-  with the last scan time (`timings.scanMs`) and cache status.
+  with the last scan time (`timings.scanMs`) and cache status. The progress row
+  is always mounted at a fixed height and the Refresh button keeps a fixed
+  width, so switching ranges or refreshing does not shift the panel.
 - `DSH_USAGE_STATS_WARMUP_MS=0` disables the warm-up; `0` TTL always rescans.
 
 ## Route contract
@@ -305,7 +310,7 @@ cd <checkout>
 npm test
 ```
 
-- `test/aggregate.test.mjs` (21) — the folds against synthetic event logs: the
+- `test/aggregate.test.mjs` (22) — the folds against synthetic event logs: the
   four-way split (including parallel tools and approval-inside-tool), token
   replacement/retry semantics, per-route token attribution, peak/off-peak token
   splitting, tiered cost, wildcard resolution, range-independent month-to-date
@@ -321,7 +326,7 @@ npm test
   range/inherited parameters, manual and auto-fetched pricing (including a
   mocked official page and the offline fallback), Search/Fetch billing, the corpus TTL cache,
   revision-aware per-session reuse, failure isolation and the agent tool;
-- `test/client.test.mjs` (11) — boots the real browser module in a `vm` with a
+- `test/client.test.mjs` (12) — boots the real browser module in a `vm` with a
   stateful React double, renders the full v4 dashboard in zh and en, opens the
   detail drawer by clicking a conversation row, renders the Search & Fetch
   section, checks the v4/v3/v2-payload compatibility notices, and renders the

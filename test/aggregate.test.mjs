@@ -713,3 +713,33 @@ test('only counts Search requests whose web_search call succeeded', () => {
   const session = analyzeSession(header(), events, { live: false });
   assert.deepEqual(session.turns[0].services, { search: 3, fetch: 0 });
 });
+
+test('range cost follows the selected window while month-to-date stays fixed', () => {
+  seq = 0;
+  const older = analyzeSession(header({ id: 'older' }), [
+    ...simpleTurn(1, NOW - 10 * DAY_MS, NOW - 10 * DAY_MS + 500, NOW - 10 * DAY_MS + 1000, { inputTokens: 1_000_000, outputTokens: 0 }),
+  ], { live: false });
+  const recent = analyzeSession(header({ id: 'recent' }), [
+    ...simpleTurn(1, NOW - 1 * DAY_MS, NOW - 1 * DAY_MS + 500, NOW - 1 * DAY_MS + 1000, { inputTokens: 1_000_000, outputTokens: 0 }),
+  ], { live: false });
+  const pricing = {
+    configured: true,
+    currency: 'CNY',
+    budgetMonthly: 100,
+    prices: { 'deepseek-official/*': { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  };
+
+  const all = summarize([older, recent], { now: NOW, range: 'all', pricing });
+  assert.equal(all.totals.cost, 2, 'both turns price into the all-time range');
+  assert.equal(all.costing.monthCost, 2);
+
+  const month = summarize([older, recent], { now: NOW, range: '30d', from: NOW - 30 * DAY_MS, to: Infinity, pricing });
+  assert.equal(month.totals.cost, 2);
+
+  const week = summarize([older, recent], { now: NOW, range: '7d', from: NOW - 7 * DAY_MS, to: Infinity, pricing });
+  assert.equal(week.totals.cost, 1, 'only the recent turn falls inside the 7-day range');
+  assert.equal(week.costing.monthCost, 2, 'month-to-date ignores the selected range');
+
+  const day = summarize([older, recent], { now: NOW, range: '1d', from: NOW - DAY_MS, to: Infinity, pricing });
+  assert.equal(day.totals.cost, 1, 'the recent turn ends exactly at the 1-day boundary, so it is included');
+});

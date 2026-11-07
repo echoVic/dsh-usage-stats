@@ -1,6 +1,6 @@
 {
   "name": "@echovic/dsh-usage-stats",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": false,
   "description": "Usage, runtime, tool and token-trend statistics for every DeepSeek Harness conversation, with an auto-fetched official price table (peak/off-peak), monthly budget and per-conversation detail",
   "type": "module",

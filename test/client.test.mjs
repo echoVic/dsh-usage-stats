@@ -670,11 +670,12 @@ function bootClient(localeId, payload) {
     },
     fetch: async (url) => {
       requestedUrls.push(String(url));
+      const body = typeof payload === 'function' ? await payload(String(url)) : payload;
       return {
         ok: true,
         status: 200,
         async json() {
-          return payload;
+          return body;
         },
       };
     },
@@ -845,9 +846,9 @@ test('renders the v5 dashboard with every section and without missing locale key
   assert.match(inspected.text, /工具消耗排行/);
   assert.match(inspected.text, /轮次健康/);
   assert.match(inspected.text, /模型用量/);
-  assert.match(inspected.text, /预计费用/);
-  assert.match(inspected.text, /CNY 92.50/);
-  assert.match(inspected.text, /本月费用已用 92.5%/);
+  assert.match(inspected.text, /区间费用/);
+  assert.match(inspected.text, /CNY 59.75/);
+  assert.match(inspected.text, /本月 CNY 92.50 · 预算已用 92.5%/);
   assert.match(inspected.text, /未知模型/);
   assert.match(inspected.text, /1 个模型未配置价格/);
   assert.match(inspected.text, /对话明细/);
@@ -871,7 +872,7 @@ test('renders the v5 dashboard with every section and without missing locale key
   assert.match(inspected.text, /前更新/);
   assert.match(inspected.text, /刷新官网价格/, 'the footer offers an explicit official-price refresh action');
   assert.match(inspected.text, /扫描 842 ms/);
-  assert.equal(inspected.markers.includes('loading'), false, 'no loading bar once the report is rendered');
+  assert.ok(inspected.markers.includes('loading-bar'), 'the loading row is always mounted (no layout shift)');
   assert.match(inspected.text, /修复登录问题/);
   assert.match(inspected.text, /未命名对话/);
   assert.match(inspected.text, /default-workspace/);
@@ -924,7 +925,7 @@ test('renders a v3 Host payload without the price-provenance line', async () => 
   const { boot, inspected } = await renderPanel('zh', fixtureV3Host());
 
   assert.match(inspected.text, /模型用量/);
-  assert.match(inspected.text, /预计费用/);
+  assert.match(inspected.text, /区间费用/);
   assert.ok(inspected.markers.includes('models'));
   assert.equal(inspected.markers.includes('upgrade'), false);
   assert.ok(inspected.markers.includes('upgrade-pricing'));
@@ -970,6 +971,40 @@ test('clicking a conversation row opens the detail drawer', async () => {
   assert.deepEqual(inspected.buggyVars, []);
 });
 
+test('switching the range updates the cost card without swapping the loading row', async () => {
+  const payloadFor = (rawUrl) => {
+    const range = new URL(rawUrl, 'http://localhost').searchParams.get('range');
+    const data = fixtureV5();
+    data.range = range;
+    if (range === '30d') data.totals.cost = 88.5;
+    return data;
+  };
+  const boot = bootClient('zh', payloadFor);
+  boot.face.apply(boot.ctx);
+  for (const injection of boot.injections) injection.callback();
+  const main = boot.registrations.find((entry) => entry.options.name === 'main');
+  const tree = await boot.mount(main.component, {});
+
+  const first = inspectTree(tree);
+  assert.match(first.text, /CNY 59\.75/);
+  assert.ok(first.markers.includes('loading-bar'));
+
+  const segment = [];
+  walk(tree, (node) => {
+    if (node.kind === 'element' && node.type === 'button' && node.props.children === '30 天') segment.push(node);
+  });
+  assert.equal(segment.length, 1, 'the 30-day range tab is present');
+  segment[0].props.onClick();
+
+  const after = await boot.settle(main.component, {});
+  const inspected = inspectTree(after);
+  assert.equal(boot.requestedUrls.at(-1).includes('range=30d'), true);
+  assert.match(inspected.text, /CNY 88\.50/, 'the cost card shows the selected range');
+  assert.match(inspected.text, /本月 CNY 92\.50/, 'month-to-date stays visible in the hint');
+  assert.ok(inspected.markers.includes('loading-bar'), 'the fixed loading row is still mounted (no flash)');
+  assert.deepEqual([...boot.missing], []);
+});
+
 test('the official-price refresh copy refetches with force=1', async () => {
   const boot = bootClient('zh', fixtureV5());
   boot.face.apply(boot.ctx);
@@ -1001,8 +1036,8 @@ test('renders in English without missing keys', async () => {
   assert.match(inspected.text, /Tool cost ranking/);
   assert.match(inspected.text, /Turn health/);
   assert.match(inspected.text, /Model usage/);
-  assert.match(inspected.text, /Estimated cost/);
-  assert.match(inspected.text, /This month used 92.5%/);
+  assert.match(inspected.text, /Range cost/);
+  assert.match(inspected.text, /this month CNY 92.50 · 92.5% of budget/);
   assert.match(inspected.text, /Official price table/);
   assert.match(inspected.text, /Refresh official prices/);
   assert.match(inspected.text, /scan 842 ms/);
