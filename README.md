@@ -99,7 +99,7 @@ the session log and includes them in the cost, month-to-date and budget:
 
 | Service | Counted from | Billed? |
 |---|---|---|
-| Search | `web/deepseek-search-llm-request` events — one outbound Search API request each (a `web_search` call can issue 2–4) | yes, official rate per 1,000 requests |
+| Search | `web/deepseek-search-llm-request` events — one outbound Search API request each (a `web_search` call can issue 2–4), counted **only when that call's tool result succeeds** | yes, official rate per 1,000 requests |
 | Fetch | `web_fetch` tool calls | no by default — the shipped `web-fetch-http` provider performs a local HTTP fetch, not a Fetch API request |
 
 The user file can override the counts' prices or opt Fetch into billing for a
@@ -114,10 +114,12 @@ composition that uses a billable Fetch provider:
 }
 ```
 
-A per-request count is exact; the *successful* qualifier is approximated — every
-outbound Search request in the log is counted, including any that failed (the
-log does not record per-request success). This affects cost by at most the
-failure rate.
+Requests are attributed to the most recent open `web_search` call and are only
+billed when its tool result reports success. A failed call's requests, a call
+that never produced a result (interrupted turn), and requests with no matching
+call are excluded. Remaining approximation: a call that fails late may have
+already issued successful requests that the fold drops (it under-counts instead
+of over-counting); per-request success is not recorded in the log.
 
 ### Optional user overrides and budget
 
@@ -199,6 +201,29 @@ and a warning row in the panel; the rest of the corpus still renders.
   restart to load new Host code), the panel renders the v1 cards/table with a
   restart notice instead of crashing on missing v2 fields.
 
+## Loading and performance
+
+The panel folds every durable session log, so the first scan is the expensive
+part (measured here over 88 persisted logs: ~2.1 s CPU to read/fold, then ~12 ms
+to aggregate the report). Several layers keep that latency out of the way:
+
+- **Warm-up scan**: ~1.5 s after the Host half activates it scans the corpus in
+  the background, so the first panel open normally hits a warm cache.
+- **Short-lived corpus cache** (30 s, `DSH_USAGE_STATS_TTL_MS`) plus a
+  revision-aware per-session cache: a repeat scan re-reads only sessions whose
+  `sessionPersistence` revision changed; range/inherited switches re-assemble
+  from memory.
+- **Parallel reads** across session logs (`DSH_USAGE_STATS_CONCURRENCY`, default 8).
+- **Non-blocking price refresh**: when the official price table TTL expires, the
+  report is served from the stale cache/bundled snapshot immediately and the
+  docs page is re-fetched in the background for the next report
+  (`pricing.source.pendingRefresh` is true meanwhile). The explicit Refresh
+  button still waits for the fresh fetch.
+- **Loading UI**: a skeleton with a first-load hint (initial load), a slim
+  updating bar plus the existing content during refreshes, and a footer line
+  with the last scan time (`timings.scanMs`) and cache status.
+- `DSH_USAGE_STATS_WARMUP_MS=0` disables the warm-up; `0` TTL always rescans.
+
 ## Route contract
 
 ```
@@ -208,6 +233,7 @@ GET /api/usage-stats.summary
     &offset=<minutes east UTC>  (local day/hour buckets; default 0)
     &force=1                    (bypass the corpus TTL cache and refresh the price table)
 → 200 { ok, version: 5, cached, cacheAgeMs, ttlMs, generatedAt, scanMs,
+        timings: { scanMs, summarizeMs, pricingMs, cached, cacheAgeMs },
         range, includeInherited, offsetMinutes,
         scope: { listed, analyzed, failed, live, subagents },
         pricing: { configured, currency, budgetMonthly,
@@ -279,17 +305,18 @@ cd <checkout>
 npm test
 ```
 
-- `test/aggregate.test.mjs` (20) — the folds against synthetic event logs: the
+- `test/aggregate.test.mjs` (21) — the folds against synthetic event logs: the
   four-way split (including parallel tools and approval-inside-tool), token
   replacement/retry semantics, per-route token attribution, peak/off-peak token
   splitting, tiered cost, wildcard resolution, range-independent month-to-date
   cost, turn endings, open turns, range clipping, local day/hour trend buckets,
   per-session tool/turn detail, Search/Fetch request counting and per-1,000
   service billing, and the inherited-prefix mode;
-- `test/pricing.test.mjs` (8) — official-page parsing (CNY and USD fixtures),
+- `test/pricing.test.mjs` (9) — official-page parsing (CNY and USD fixtures),
   user-entry normalization, the peak-hour calendar, and the resolution ladder
-  Search/Fetch service-price parsing and overrides, and the resolution ladder
-  (live fetch → cache → bundled snapshot → manual override → malformed file);
+  Search/Fetch service-price parsing and overrides, stale-while-revalidate
+  background refresh, and the resolution ladder (live fetch → cache → bundled
+  snapshot → manual override → malformed file);
 - `test/route.test.mjs` (16) — `apply()` registration, the Fetch handler,
   range/inherited parameters, manual and auto-fetched pricing (including a
   mocked official page and the offline fallback), Search/Fetch billing, the corpus TTL cache,
@@ -311,9 +338,10 @@ npm test
   reported as unpriced); the month figure is local-calendar based.
 - Peak/off-peak classification knows weekdays only — Chinese statutory holidays
   are billed as off-peak even though the official page excludes them from peak.
-- Search cost counts outbound Search API requests from the log; the billing unit
-  is *successful* requests, and per-request success is not recorded, so failed
-  requests are counted too (bounded by the failure rate).
+- Search cost counts Search API requests belonging to a successful `web_search`
+  call; a call that fails late can under-count requests it already issued, since
+  per-request success is not recorded. Requests without a matching call are not
+  billed.
 - `web_fetch` runs through the local HTTP provider and is unbilled by default;
   opt into Fetch billing via `services.fetch.billed` only for a billable Fetch
   provider.

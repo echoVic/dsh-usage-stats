@@ -22,6 +22,7 @@ const URL_ROOT = 'http://127.0.0.1:50878';
 const TEST_HOME = mkdtempSync(join(tmpdir(), 'dsh-usage-home-'));
 mkdirSync(join(TEST_HOME, 'usage-stats'), { recursive: true });
 process.env.DSH_HOME = TEST_HOME;
+process.env.DSH_USAGE_STATS_WARMUP_MS = '0';
 process.env.DSH_USAGE_STATS_AUTO_PRICING = '0';
 const MISSING_PRICES = join(TEST_HOME, 'usage-stats', 'prices.json');
 process.env.DSH_USAGE_STATS_PRICES = MISSING_PRICES;
@@ -212,6 +213,10 @@ test('serves a v5 report with runtime split, trend, tools, services, turn health
 
   assert.equal(payload.ok, true);
   assert.equal(payload.version, 5);
+  assert.ok(payload.timings !== null && typeof payload.timings === 'object');
+  assert.ok(Number.isFinite(payload.timings.scanMs));
+  assert.ok(Number.isFinite(payload.timings.summarizeMs));
+  assert.ok(Number.isFinite(payload.timings.pricingMs));
   assert.equal(payload.range, 'all');
   assert.equal(payload.includeInherited, false);
   assert.equal(payload.scope.listed, 1);
@@ -455,10 +460,12 @@ test('counts Search/Fetch usage and bills Search per 1,000 requests', async () =
     turnEvents.pop(); // keep the turn open while the search/fetch work happens
     addPersisted(HEADER_B, [
       ...turnEvents,
+      event('tool/call', { turn: 1, step: 2, callId: 'ws1', name: 'web_search', arguments: '{}' }, start + 550),
       event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, start + 600),
       event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, start + 610),
-      event('tool/call', { turn: 1, step: 2, callId: 'f1', name: 'web_fetch', arguments: '{}' }, start + 700),
-      event('tool/call', { turn: 1, step: 2, callId: 'f2', name: 'web_fetch', arguments: '{}' }, start + 710),
+      event('tool/result', { turn: 1, step: 2, message: { role: 'tool', source: { kind: 'tool', callId: 'ws1' }, toolCallId: 'ws1', content: [] } }, start + 650),
+      event('tool/call', { turn: 1, step: 3, callId: 'f1', name: 'web_fetch', arguments: '{}' }, start + 700),
+      event('tool/call', { turn: 1, step: 3, callId: 'f2', name: 'web_fetch', arguments: '{}' }, start + 710),
       event('turn/end', { turn: 1, reason: { kind: 'completed' } }, start + 800),
     ]);
     apply(ctx);

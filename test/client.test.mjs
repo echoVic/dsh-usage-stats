@@ -47,6 +47,7 @@ function fixtureV5() {
     offsetMinutes: 480,
     generatedAt: now - 1200,
     scanMs: 12,
+    timings: { scanMs: 842, summarizeMs: 12, pricingMs: 1, cached: false, cacheAgeMs: 0 },
     scope: { listed: 2, analyzed: 2, failed: 0, live: 1, subagents: 1 },
     pricing: {
       configured: true,
@@ -60,6 +61,7 @@ function fixtureV5() {
         provider: 'deepseek-official',
         userFile: '/Users/test/.dsh/usage-stats/prices.json',
         cacheFile: '/Users/test/.dsh/usage-stats/prices.cache.json',
+        pendingRefresh: false,
       },
       services: {
         search: { pricePerThousand: 5, billed: true },
@@ -289,6 +291,7 @@ function fixtureV5() {
  */
 function fixtureV2Host() {
   const data = JSON.parse(JSON.stringify(fixtureV5()));
+  delete data.timings;
   data.version = 2;
   delete data.pricing;
   delete data.costing;
@@ -389,6 +392,7 @@ function fixtureLegacy() {
  */
 function fixtureV3Host() {
   const data = JSON.parse(JSON.stringify(fixtureV5()));
+  delete data.timings;
   data.version = 3;
   data.pricing = {
     configured: true,
@@ -416,6 +420,7 @@ function fixtureV3Host() {
  */
 function fixtureV4Host() {
   const data = JSON.parse(JSON.stringify(fixtureV5()));
+  delete data.timings;
   data.version = 4;
   delete data.services;
   delete data.totals.services;
@@ -865,6 +870,8 @@ test('renders the v5 dashboard with every section and without missing locale key
   assert.match(inspected.text, /官网价目表/);
   assert.match(inspected.text, /前更新/);
   assert.match(inspected.text, /刷新官网价格/, 'the footer offers an explicit official-price refresh action');
+  assert.match(inspected.text, /扫描 842 ms/);
+  assert.equal(inspected.markers.includes('loading'), false, 'no loading bar once the report is rendered');
   assert.match(inspected.text, /修复登录问题/);
   assert.match(inspected.text, /未命名对话/);
   assert.match(inspected.text, /default-workspace/);
@@ -998,6 +1005,7 @@ test('renders in English without missing keys', async () => {
   assert.match(inspected.text, /This month used 92.5%/);
   assert.match(inspected.text, /Official price table/);
   assert.match(inspected.text, /Refresh official prices/);
+  assert.match(inspected.text, /scan 842 ms/);
   assert.match(inspected.text, /Search & Fetch/);
   assert.match(inspected.text, /Local fetch, unbilled/);
   assert.match(inspected.text, /Conversations/);

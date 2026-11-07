@@ -625,16 +625,21 @@ test('splits tokens into official peak and off-peak billing tiers', () => {
 test('counts Search requests and Fetch calls and bills Search per 1,000 requests', () => {
   seq = 0;
   const base = NOW - 5000; // inside the current month, so the budget sees it
+  const searchEvents = [
+    event('tool/call', { turn: 1, step: 2, callId: 'ws1', name: 'web_search', arguments: '{}' }, base + 550),
+    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 600),
+    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 700),
+    event('tool/result', { turn: 1, step: 2, message: { role: 'tool', source: { kind: 'tool', callId: 'ws1' }, toolCallId: 'ws1', content: [] } }, base + 750),
+  ];
   const events = [
     event('turn/start', { turn: 1 }, base),
     event('step/start', { turn: 1, step: 1 }, base + 100),
     assistantMessage(1, 1, { inputTokens: 1000, outputTokens: 0 }, base + 500),
     event('step/end', { turn: 1, step: 1 }, base + 510),
-    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 600),
-    event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, base + 700),
-    event('tool/call', { turn: 1, step: 2, callId: 'f1', name: 'web_fetch', arguments: '{}' }, base + 800),
-    event('tool/call', { turn: 1, step: 2, callId: 'f2', name: 'web_fetch', arguments: '{}' }, base + 900),
-    event('tool/call', { turn: 1, step: 2, callId: 'f3', name: 'web_fetch', arguments: '{}' }, base + 1000),
+    ...searchEvents,
+    event('tool/call', { turn: 1, step: 3, callId: 'f1', name: 'web_fetch', arguments: '{}' }, base + 800),
+    event('tool/call', { turn: 1, step: 3, callId: 'f2', name: 'web_fetch', arguments: '{}' }, base + 900),
+    event('tool/call', { turn: 1, step: 3, callId: 'f3', name: 'web_fetch', arguments: '{}' }, base + 1000),
     event('turn/end', { turn: 1, reason: { kind: 'completed' } }, base + 1100),
   ];
   const session = analyzeSession(header(), events, { live: false });
@@ -670,4 +675,41 @@ test('counts Search requests and Fetch calls and bills Search per 1,000 requests
   assert.ok(Math.abs(report.totals.monthCost - 0.011) < 1e-12);
   assert.ok(Math.abs(report.costing.serviceCost - 0.01) < 1e-12);
   assert.equal(report.costing.servicesConfigured, true);
+});
+
+test('only counts Search requests whose web_search call succeeded', () => {
+  seq = 0;
+  const base = NOW - 5000;
+  const searchEvent = (time) => event('web/deepseek-search-llm-request', { endpoint: 'https://api.deepseek.com/anthropic/v1/messages', apiVersion: '2023-06-01', body: {} }, time);
+  const result = (callId, time, isError) => event('tool/result', {
+    turn: 1,
+    step: 2,
+    ...(isError ? { error: { message: 'search failed' } } : {}),
+    message: { role: 'tool', source: { kind: 'tool', callId }, toolCallId: callId, content: [], ...(isError ? { isError: true } : {}) },
+  }, time);
+  const events = [
+    event('turn/start', { turn: 1 }, base),
+    event('step/start', { turn: 1, step: 1 }, base + 100),
+    assistantMessage(1, 1, { inputTokens: 1000, outputTokens: 0 }, base + 500),
+    event('step/end', { turn: 1, step: 1 }, base + 510),
+    // Successful call with three requests.
+    event('tool/call', { turn: 1, step: 2, callId: 'ok', name: 'web_search', arguments: '{}' }, base + 550),
+    searchEvent(base + 560),
+    searchEvent(base + 570),
+    searchEvent(base + 580),
+    result('ok', base + 590, false),
+    // Failed call: its two requests are not billed.
+    event('tool/call', { turn: 1, step: 3, callId: 'bad', name: 'web_search', arguments: '{}' }, base + 600),
+    searchEvent(base + 610),
+    searchEvent(base + 620),
+    result('bad', base + 630, true),
+    // Unfinished call: one request, no result, not billed.
+    event('tool/call', { turn: 1, step: 4, callId: 'open', name: 'web_search', arguments: '{}' }, base + 640),
+    searchEvent(base + 650),
+    // Unattributed request (no open web_search call): not billed.
+    searchEvent(base + 660),
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } }, base + 700),
+  ];
+  const session = analyzeSession(header(), events, { live: false });
+  assert.deepEqual(session.turns[0].services, { search: 3, fetch: 0 });
 });

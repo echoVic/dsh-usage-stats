@@ -249,3 +249,51 @@ test('backs off from repeated refresh failures and serves the stale cache', asyn
     scratchDir.cleanup();
   }
 });
+
+test('background mode answers from the stale cache and refreshes for the next report', async () => {
+  const scratchDir = scratch();
+  try {
+    // Clear any refresh-failure backoff left by earlier tests with one good fetch.
+    await resolvePricing({ ...scratchDir.paths, force: true, fetchImpl: fetchHtml(OFFICIAL_CN_WITH_SERVICES), envCurrency: 'CNY' });
+    const oldModels = parseOfficialPricing(OFFICIAL_CN_WITH_SERVICES).models;
+    writeFileSync(scratchDir.paths.cacheFile, JSON.stringify({
+      schemaVersion: 1,
+      currency: 'CNY',
+      fetchedAt: Date.now() - 48 * 3600_000,
+      sourceUrl: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing',
+      models: oldModels,
+      services: parseServicePricing(SERVICE_TABLE_CN),
+    }));
+    const slowFetch = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return { ok: true, status: 200, async text() { return OFFICIAL_CN_WITH_SERVICES; } };
+    };
+    const startedAt = performance.now();
+    const fast = await resolvePricing({
+      ...scratchDir.paths,
+      background: true,
+      fetchImpl: slowFetch,
+      envCurrency: 'CNY',
+    });
+    const elapsed = performance.now() - startedAt;
+    assert.ok(elapsed < 150, `a stale cache answers without waiting for the docs fetch (${Math.round(elapsed)}ms)`);
+    assert.equal(fast.source.kind, 'cache');
+    assert.equal(fast.source.pendingRefresh, true);
+    assert.equal(fast.configured, true);
+
+    // The queued refresh lands in the cache file shortly after.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const cached = JSON.parse(readFileSync(scratchDir.paths.cacheFile, 'utf8'));
+      if (cached.fetchedAt > Date.now() - 5000) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const cached = JSON.parse(readFileSync(scratchDir.paths.cacheFile, 'utf8'));
+    assert.ok(cached.fetchedAt > Date.now() - 5000, 'the background refresh updated the disk cache');
+
+    const after = await resolvePricing({ ...scratchDir.paths, background: true, fetchImpl: slowFetch, envCurrency: 'CNY' });
+    assert.equal(after.source.kind, 'cache');
+    assert.equal(after.source.pendingRefresh, false, 'a fresh cache needs no background refresh');
+  } finally {
+    scratchDir.cleanup();
+  }
+});
